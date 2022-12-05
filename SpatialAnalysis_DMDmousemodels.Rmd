@@ -1,0 +1,2587 @@
+---
+title: "Spatial analysis Visium DMD mouse models"
+author: "LGM Heezen"
+---
+
+#Install packages
+```{r}
+install.packages("caret")
+install.packages("hdf5r")
+install.packages("png")
+install.packages("OpenImageR")
+install.packages("viridis")
+install.packages("RColorBrewer")
+install.packages("torch")
+```
+
+#Load packages
+```{r}
+library(caret)
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(png)
+library(OpenImageR)
+library(viridis)
+library(RColorBrewer)
+```
+
+#Load nice colors
+```{r}
+extracols <- c('#543005','#8c510a','#bf812d','#dfc27d','#f6e8c3','#f5f5f5','#c7eae5','#80cdc1','#35978f','#01665e','#003c30')
+extracols
+
+healthycols <- c('#762a83', '#9970ab', '#c2a5cf', '#e7d4e8', '#d9f0d3', '#a6dba0', '#5aae61', '#1b7837')
+healthycols
+
+samplecols <-  c('#008837', '#a6dba0', '#c2a5cf', '#7b3294')
+samplecols
+
+clustcolnew <- colorRampPalette(brewer.pal(10, "Paired"))
+clustcolnew <- c('#A6CEE3', '#2E81B9', '#91C893', '#5DB54B', '#A29C68', '#8417f9', '#EB5037', '#FDB056', '#F98417', '#CAB2D6', '#b9662e')
+
+colorsmask <- c('#440154', '#f5f5f5')
+colorsmask2 <- c('#297a8e', '#f5f5f5') #healthy
+colorsmask5 <- c('#6e016b','#f5f5f5') #diseased
+
+```
+
+#Filter/Normalize data
+```{r}
+#Load data
+curr.dir <- "/exports/humgen/lheezen/visium/mouse"
+data.dir <- "/exports/humgen/lheezen/visium/mouse/"
+samples <- c("manspaceranger_C57BL10", "manspaceranger_DBA2J", "manspaceranger_MDX", "manspaceranger_D2MDX")
+
+#Select sample 
+curr.sample <- samples[1] #C57BL10 as example here, done for all 4 samples
+#Load data
+visium <- Load10X_Spatial(data.dir = paste0(data.dir, curr.sample, "/outs"))
+
+#Get rid of mitochondrial reads in data
+mito.genes <- grep(pattern = "^mt-", x = rownames(visium), value = FALSE)
+visium.filt <- visium[-mito.genes]
+rownames(visium@assays$Spatial[mito.genes]) #get the mt genes
+
+#Filter out spots with very few counts or extremely high counts (set this seperately for every sample)
+plot1 <- VlnPlot(visium.filt, features = "nCount_Spatial", pt.size = 0.1) + NoLegend()
+plot2 <- SpatialFeaturePlot(visium.filt, features = "nCount_Spatial") + theme(legend.position = "right")
+wrap_plots(plot1,plot2, widths = c(1,1), heights = c(1,1))
+
+#Specific settings per sample for filtering based on nCount and nFeature
+visium.filt <- visium.filt[, visium.filt$nCount_Spatial >= 150 & visium.filt$nCount_Spatial <= 40000 & visium.filt$nFeature_Spatial >= 150 & visium.filt$nFeature_Spatial <= 5000] #C57BL10
+visium.filt <- visium.filt[, visium.filt$nCount_Spatial >= 100 & visium.filt$nCount_Spatial <= 20000 & visium.filt$nFeature_Spatial >= 200 & visium.filt$nFeature_Spatial <= 4000] #DBA2J
+visium.filt <- visium.filt[, visium.filt$nCount_Spatial >= 200 & visium.filt$nCount_Spatial <= 40000 & visium.filt$nFeature_Spatial >= 250 & visium.filt$nFeature_Spatial <= 5000] #mdx
+visium.filt <- visium.filt[, visium.filt$nCount_Spatial >= 100 & visium.filt$nCount_Spatial <= 20000 & visium.filt$nFeature_Spatial >= 150 & visium.filt$nFeature_Spatial <= 5000] #D2mdx
+
+#Normalization using SCTransform
+visium.filt <- SCTransform(visium.filt, assay = "Spatial", verbose = FALSE)
+
+#Save objects
+saveRDS(visium.filt, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210212/Filtered_C57BL10_normalized_object.rds")
+saveRDS(visium.filt, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210212/Filtered_DBA2J_normalized_object.rds")
+saveRDS(visium.filt, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210212/Filtered_Mdx_normalized_object.rds")
+saveRDS(visium.filt, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210212/Filtered_D2-Mdx_normalized_object.rds")
+
+```
+
+#Load data
+```{r}
+#Load data C57BL10
+visiumC57BL10 <- readRDS(file = "/exports/humgen/lheezen/visium/mouse/Analysis/210212/Filtered_C57BL10_normalized_object.rds", refhook = NULL)
+head(visiumC57BL10@meta.data)
+#Load data DBA2J
+visiumDBA2J <- readRDS(file = "/exports/humgen/lheezen/visium/mouse/Analysis/210212/Filtered_DBA2J_normalized_object.rds", refhook = NULL)
+head(visiumDBA2J@meta.data)
+#Load data Mdx
+visiumMdx <- readRDS(file = "/exports/humgen/lheezen/visium/mouse/Analysis/210212/Filtered_Mdx_normalized_object.rds", refhook = NULL)
+head(visiumMdx@meta.data)
+#Load data D2-Mdx
+visiumD2Mdx <- readRDS(file = "/exports/humgen/lheezen/visium/mouse/Analysis/210212/Filtered_D2-Mdx_normalized_object.rds", refhook = NULL)
+head(visiumD2Mdx@meta.data)
+
+# Change name of the orig.ident column
+visiumC57BL10@meta.data$orig.ident <- "C57BL10"
+visiumDBA2J@meta.data$orig.ident <- "DBA2J"
+visiumMdx@meta.data$orig.ident <- "mdx"
+visiumD2Mdx@meta.data$orig.ident <- "D2-mdx"
+
+```
+
+#Check merged data for batch effect
+```{r}
+#Merge seurat objects, define the cell identifiers
+muscle.merge <- merge(visiumC57BL10, y = c(visiumDBA2J, visiumMdx, visiumD2Mdx), add.cell.ids = c("C57BL10", "DBA2J", "mdx", "D2-mdx"), project = "Visium mouse muscle")
+muscle.merge
+head(muscle.merge@meta.data)
+
+#Save object
+saveRDS(muscle.merge, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210428/Mergeddata.rds")
+
+#Joint dimensional reduction on underlying RNA expression data
+DefaultAssay(muscle.merge) <- "SCT"
+VariableFeatures(muscle.merge) <- c(VariableFeatures(visiumC57BL10), VariableFeatures(visiumDBA2J), VariableFeatures(visiumMdx), VariableFeatures(visiumD2Mdx))
+muscle.merge <- RunPCA(muscle.merge, verbose = FALSE)
+muscle.merge <- FindNeighbors(muscle.merge, dims = 1:30)
+muscle.merge <- FindClusters(muscle.merge, verbose = FALSE)
+muscle.merge <- RunUMAP(muscle.merge, dims = 1:30)
+
+#Visualize
+p2 <- DimPlot(muscle.merge, reduction = "umap", group.by =  "orig.ident", cols = sample.cols[c(1,4,2,3)], label = TRUE) + ggtitle("UMAP merged samples")
+p2
+
+```
+
+#Clustering of normalized and filtered counts
+##Tested different resolutions (0.4,0.6,0.8,1.0,1.4)
+```{r}
+#C57BL10
+visiumC57BL10c <- RunPCA(visiumC57BL10, assay = "SCT", verbose = FALSE)
+visiumC57BL10c <- FindNeighbors(visiumC57BL10c, reduction = "pca", dims = 1:30) #Determine the K-nearest neighbor graph
+visiumC57BL10c <- FindClusters(object = visiumC57BL10c, resolution = c(0.4, 0.6, 0.8, 1.0, 1.4)) #Determine the clusters for various resolutions
+
+#Visualize for each resolution (below only 0.8 shown)
+Idents(object = visiumC57BL10c) <- "SCT_snn_res.0.8"
+visiumC57BL10c <- RunTSNE(visiumC57BL10c, reduction = "pca", dims = 1:30) #Same number of dims as FindNeighbors
+p1 <- DimPlot(visiumC57BL10c, reduction = "tsne", label = TRUE, label.size = 3)
+p2 <- SpatialDimPlot(visiumC57BL10c, label = TRUE, label.size = 3)
+p1 + p2
+
+
+#DBA2J
+visiumDBA2Jc <- RunPCA(visiumDBA2J, assay = "SCT", verbose = FALSE)
+visiumDBA2Jc <- FindNeighbors(visiumDBA2Jc, reduction = "pca", dims = 1:30) #Determine the K-nearest neighbor graph
+visiumDBA2Jc <- FindClusters(object = visiumDBA2Jc, resolution = c(0.4, 0.6, 0.8, 1.0, 1.4)) #Determine the clusters for various resolutions
+
+#Visualize for each resolution (below only 0.8 shown)
+Idents(object = visiumDBA2Jc) <- "SCT_snn_res.0.8"
+visiumDBA2Jc <- RunTSNE(visiumDBA2Jc, reduction = "pca", dims = 1:30) #Same number of dims as FindNeighbors
+p1 <- DimPlot(visiumDBA2Jc, reduction = "tsne", label = TRUE, label.size = 3)
+p2 <- SpatialDimPlot(visiumDBA2Jc, label = TRUE, label.size = 3)
+p1 + p2
+
+
+#mdx
+visiumMdxc <- RunPCA(visiumMdx, assay = "SCT", verbose = FALSE)
+visiumMdxc <- FindNeighbors(visiumMdxc, reduction = "pca", dims = 1:30) #Determine the K-nearest neighbor graph
+visiumMdxc <- FindClusters(object = visiumMdxc, resolution = c(0.4, 0.6, 0.8, 1.0, 1.4)) #Determine the clusters for various resolutions
+
+#Visualize for each resolution (below only 0.8 shown)
+Idents(object = visiumMdxc) <- "SCT_snn_res.0.8"
+visiumMdxc <- RunTSNE(visiumMdxc, reduction = "pca", dims = 1:30) #Same number of dims as FindNeighbors
+p1 <- DimPlot(visiumMdxc, reduction = "tsne", label = TRUE, label.size = 3)
+p2 <- SpatialDimPlot(visiumMdxc, label = TRUE, label.size = 3)
+p1 + p2
+
+
+#D2-mdx
+visiumD2Mdxc <- RunPCA(visiumD2Mdx, assay = "SCT", verbose = FALSE)
+visiumD2Mdxc <- FindNeighbors(visiumD2Mdxc, reduction = "pca", dims = 1:30) #Determine the K-nearest neighbor graph
+visiumD2Mdxc <- FindClusters(object = visiumD2Mdxc, resolution = c(0.4, 0.6, 0.8, 1.0, 1.4)) #Determine the clusters for various resolutions
+
+#Visualize for each resolution (below only 0.8 shown)
+Idents(object = visiumD2Mdxc) <- "SCT_snn_res.0.8"
+visiumD2Mdxc <- RunTSNE(visiumD2Mdxc, reduction = "pca", dims = 1:30) #Same number of dims as FindNeighbors
+p1 <- DimPlot(visiumD2Mdxc, reduction = "tsne", label = TRUE, label.size = 3)
+p2 <- SpatialDimPlot(visiumD2Mdxc, label = TRUE, label.size = 3)
+p1 + p2
+
+
+##Chosen resolutions:
+Idents(object = visiumC57BL10c) <- "SCT_snn_res.0.4"
+Idents(object = visiumDBA2Jc) <- "SCT_snn_res.0.8"
+Idents(object = visiumMdxc) <- "SCT_snn_res.0.8"
+Idents(object = visiumD2Mdxc) <- "SCT_snn_res.0.4"
+
+
+#Save Seurat object filtered, normalized with specific resolution in clustering
+saveRDS(visiumC57BL10c, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/C57BL10_filtnormalized.rds")
+saveRDS(visiumDBA2Jc, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/DBA2J_filtnormalized.rds")
+saveRDS(visiumMdxc, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/Mdx_filtnormalized.rds")
+saveRDS(visiumD2Mdxc, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/D2-Mdx_filtnormalized.rds")
+
+
+```
+
+# Find all markers
+```{r}
+##C57BL10
+visiumC57BL10c.mark <- FindAllMarkers(object = visiumC57BL10c, min.pct = 0.1, only.pos = FALSE)
+write.csv(visiumC57BL10c.mark, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/C57BL10_allmarkers_clusters.csv")
+
+#Select top 10 per cluster
+C57BL10top10 <- visiumC57BL10c.mark %>% group_by(cluster) %>% top_n(10, avg_logFC)
+#Expression heatmap top 10 per cluster
+DoHeatmap(object = visiumC57BL10c, features = C57BL10top10$gene, label = TRUE)
+
+
+##DBA2J
+visiumDBA2Jc.mark <- FindAllMarkers(object = visiumDBA2Jc, min.pct = 0.1, only.pos = FALSE)
+write.csv(visiumDBA2Jc.mark, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/DBA2J_allmarkers_clusters.csv")
+
+#Select top 10 per cluster
+DBA2Jtop10 <- visiumDBA2Jc.mark %>% group_by(cluster) %>% top_n(10, avg_logFC)
+#Expression heatmap top 10 per cluster
+DoHeatmap(object = visiumDBA2Jc, features = DBA2Jtop10$gene, label = TRUE)
+
+
+##mdx
+visiumMdxc.mark <- FindAllMarkers(object = visiumMdxc, min.pct = 0.1, only.pos = FALSE)
+write.csv(visiumMdxc.mark, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/Mdx_allmarkers_clusters.csv")
+
+#Select top 10 per cluster
+Mdxtop10 <- visiumMdxc.mark %>% group_by(cluster) %>% top_n(10, avg_logFC)
+#Expression heatmap top 10 per cluster
+DoHeatmap(object = visiumMdxc, features = Mdxtop10$gene, label = TRUE)
+
+
+##D2-mdx
+visiumD2Mdxc.mark <- FindAllMarkers(object = visiumD2Mdxc, min.pct = 0.1, only.pos = FALSE)
+write.csv(visiumD2Mdxc.mark, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/D2Mdx_allmarkers_clusters.csv")
+
+#Select top 10 per cluster
+D2Mdxtop10 <- visiumD2Mdxc.mark %>% group_by(cluster) %>% top_n(10, avg_logFC)
+#Expression heatmap top 10 per cluster
+DoHeatmap(object = visiumD2Mdxc, features = D2Mdxtop10$gene, label = TRUE)
+
+```
+
+#Load manually drawn histological masks
+```{r}
+##C57BL10
+#Load tissuepositions file + add header and rownames to the file (rownames being the spots)
+tissuepositions <- read.csv(file ="/exports/humgen/lheezen/visium/mouse/manspaceranger_C57BL10/outs/spatial/tissue_positions_list.csv",header = FALSE)
+rownames(tissuepositions) <- tissuepositions$V1
+
+#Create list of filenames, selects all masks that need to be aligned
+filenames <- list.files("/exports/humgen/lheezen/visium/mouse/Annotations/C57BL10/", pattern="*.png", full.names = T)
+filenames
+
+#For-loop (loading and aligning masks to the data) 
+for(idx in filenames) {
+#idx <- filenames[23]
+    C57BL10_mask <- readPNG(source = paste0(idx), native = FALSE, info = TRUE) #Read the masks
+    C57BL10_mask <- C57BL10_mask[,,4] #Select correct dimension of the image which is the 4th where the 0s and 1s are
+    C57BL10_mask_flip <- flipImage(C57BL10_mask, mode = "horizontal") #First flip the mask horizontally
+    C57BL10_mask_fliprot <- rotateFixed(C57BL10_mask_flip, 270) #Then rotate the mask 270 degrees
+    
+    for (i in 1:dim(tissuepositions)[1]){
+        tissuepositions$mask[i] <-  C57BL10_mask_fliprot[tissuepositions$V6[i], tissuepositions$V5[i]]
+    } # For loop aligning the tissue positions to the matrix of mask
+    
+    tissuepositions <- tissuepositions[rownames(visiumC57BL10@meta.data),] # align barcodes between csv file and image annotation
+    visiumC57BL10@meta.data <- cbind(visiumC57BL10@meta.data, tissuepositions$mask) # add mask info to metadata 
+    colnames(visiumC57BL10@meta.data)[dim(visiumC57BL10@meta.data)[2]] <- sub("/exports/humgen/lheezen/visium/mouse/Annotations/C57BL10//FULL-1_", "", idx) #rename the colname to specific mask-image
+}
+
+head(visiumC57BL10@meta.data)
+
+#Make new column 'musclemask' where the labels of different muscles are given when ==1 
+visiumC57BL10@meta.data$musclemask[visiumC57BL10@meta.data$C57BL10_VM_resize.png == 1] <- "VM"
+visiumC57BL10@meta.data$musclemask[visiumC57BL10@meta.data$C57BL10_VL_resize.png == 1] <- "VL"
+visiumC57BL10@meta.data$musclemask[visiumC57BL10@meta.data$C57BL10_VI_resize.png == 1] <- "VI"
+visiumC57BL10@meta.data$musclemask[visiumC57BL10@meta.data$C57BL10_RF_resize.png == 1] <- "RF"
+
+#Save object
+saveRDS(visiumC57BL10, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210428/C57BL10_filtnormclustmasks.rds")
+
+##DBA2J
+#Load tissuepositions file + add header and rownames to the file (rownames being the spots)
+tissuepositions <- read.csv(file ="/exports/humgen/lheezen/visium/mouse/manspaceranger_DBA2J/outs/spatial/tissue_positions_list.csv", header = FALSE)
+rownames(tissuepositions) <- tissuepositions$V1
+
+#Create list of filenames, selects all masks that need to be aligned
+filenames <- list.files("/exports/humgen/lheezen/visium/mouse/Annotations/DBA2J/", pattern="*.png", full.names = T)
+filenames
+
+#For-loop (loading and aligning masks to the data) 
+for(idx in filenames) {
+#idx <- filenames[23]
+    DBA2J_mask <- readPNG(source = paste0(idx), native = FALSE, info = TRUE) #Read the masks
+    DBA2J_mask <- DBA2J_mask[,,4] #Select correct dimension of the image which is the 4th where the 0s and 1s are
+    DBA2J_mask_flip <- flipImage(DBA2J_mask, mode = "horizontal") #First flip the mask horizontally
+    DBA2J_mask_fliprot <- rotateFixed(DBA2J_mask_flip, 270) #Then rotate the mask 270 degrees
+    
+    for (i in 1:dim(tissuepositions)[1]){
+        tissuepositions$mask[i] <-  DBA2J_mask_fliprot[tissuepositions$V6[i], tissuepositions$V5[i]]
+    } # For loop aligning the tissue positions to the matrix of mask
+    
+    tissuepositions <- tissuepositions[rownames(visiumDBA2J@meta.data),] # align barcodes between csv file and image annotation
+    visiumDBA2J@meta.data <- cbind(visiumDBA2J@meta.data, tissuepositions$mask) # add mask info to metadata 
+    colnames(visiumDBA2J@meta.data)[dim(visiumDBA2J@meta.data)[2]] <- sub("/exports/humgen/lheezen/visium/mouse/Annotations/DBA2J//FULL-1_", "", idx) #rename the colname to specific mask-image
+}
+
+head(visiumDBA2J@meta.data)
+
+#Make new column 'musclemask' where the labels of different muscles are given when ==1 
+visiumDBA2J@meta.data$musclemask[visiumDBA2J@meta.data$DBA2J_VM_resize.png == 1] <- "VM"
+visiumDBA2J@meta.data$musclemask[visiumDBA2J@meta.data$DBA2J_VL_resize.png == 1] <- "VL"
+visiumDBA2J@meta.data$musclemask[visiumDBA2J@meta.data$DBA2J_RF_resize.png == 1] <- "RF"
+
+#Save object
+saveRDS(visiumDBA2J, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210428/DBA2J_filtnormalizedclustmasks.rds")
+
+##mdx
+#Load tissuepositions file + add header and rownames to the file (rownames being the spots)
+tissuepositions <- read.csv(file ="/exports/humgen/lheezen/visium/mouse/manspaceranger_MDX/outs/spatial/tissue_positions_list.csv",header = FALSE)
+rownames(tissuepositions) <- tissuepositions$V1
+
+#Create list of filenames, selects all masks that need to be aligned
+filenames <- list.files("/exports/humgen/lheezen/visium/mouse/Annotations/Mdx/", pattern="*.png", full.names = T)
+filenames
+
+#For-loop (loading and aligning masks to the data) 
+for(idx in filenames) {
+#idx <- filenames[23]
+    Mdx_mask <- readPNG(source = paste0(idx), native = FALSE, info = TRUE) #Read the masks
+    Mdx_mask <- Mdx_mask[,,4] #Select correct dimension of the image which is the 4th where the 0s and 1s are
+    Mdx_mask_flip <- flipImage(Mdx_mask, mode = "horizontal") #First flip the mask horizontally
+    Mdx_mask_fliprot <- rotateFixed(Mdx_mask_flip, 270) #Then rotate the mask 270 degrees
+    
+    for (i in 1:dim(tissuepositions)[1]){
+        tissuepositions$mask[i] <-  Mdx_mask_fliprot[tissuepositions$V6[i], tissuepositions$V5[i]]
+    } # For loop aligning the tissue positions to the matrix of mask
+    
+    tissuepositions <- tissuepositions[rownames(visiumMdx@meta.data),] # align barcodes between csv file and image annotation
+    visiumMdx@meta.data <- cbind(visiumMdx@meta.data, tissuepositions$mask) # add mask info to metadata 
+    colnames(visiumMdx@meta.data)[dim(visiumMdx@meta.data)[2]] <- sub("/exports/humgen/lheezen/visium/mouse/Annotations/Mdx//FULL-1_", "", idx) #rename the colname to specific mask-image
+}
+
+head(visiumMdx@meta.data)
+
+#Make new column 'musclemask' where the labels of different muscles/ are given when ==1 
+visiumMdx@meta.data$musclemask[visiumMdx@meta.data$Mdx_VM_resize.png == 1] <- "VM"
+visiumMdx@meta.data$musclemask[visiumMdx@meta.data$Mdx_VL_resize.png == 1] <- "VL"
+visiumMdx@meta.data$musclemask[visiumMdx@meta.data$Mdx_RF_resize.png == 1] <- "RF"
+
+#Make new column 'biolmask' where the labels of different histological appearances are given when ==1 
+visiumMdx@meta.data$maskname[visiumMdx@meta.data$Mdx_DamAr1_resize.png == 1] <- "Technical damage"
+
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam1_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam2_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam3_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam4_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam5_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam6_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam7_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam8_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam9_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam10_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam11_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam12_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam13_resize.png == 1] <- "Inflammation"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Inflam14_resize.png == 1] <- "Inflammation"
+
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Hypertrophic1_resize.png == 1] <- "Hypertrophy"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Hypertrophic2_resize.png == 1] <- "Hypertrophy"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Hypertrophic3_resize.png == 1] <- "Hypertrophy"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Hypertrophic4_resize.png == 1] <- "Necrosis"
+visiumMdx@meta.data$biolmask[visiumMdx@meta.data$Mdx_Hypertrophic5_resize.png == 1] <- "Hypertrophy"
+
+#Save object
+saveRDS(visiumMdx, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210428/Mdx_filtnormalizedclustmasks.rds")
+
+
+##D2-mdx
+#Load tissuepositions file + add header and rownames to the file (rownames being the spots)
+tissuepositions <- read.csv(file ="/exports/humgen/lheezen/visium/mouse/manspaceranger_D2MDX/outs/spatial/tissue_positions_list.csv",header = FALSE)
+rownames(tissuepositions) <- tissuepositions$V1
+
+#Create list of filenames, selects all masks that need to be aligned
+filenames <- list.files("/exports/humgen/lheezen/visium/mouse/Annotations/D2-Mdx/", pattern="*.png", full.names = T)
+filenames
+
+#For-loop (loading and aligning masks to the data) 
+for(idx in filenames) {
+#idx <- filenames[23]
+    D2Mdx_mask <- readPNG(source = paste0(idx), native = FALSE, info = TRUE) #Read the masks
+    D2Mdx_mask <- D2Mdx_mask[,,4] #Select correct dimension of the image which is the 4th where the 0s and 1s are
+    D2Mdx_mask_flip <- flipImage(D2Mdx_mask, mode = "horizontal") #First flip the mask horizontally
+    D2Mdx_mask_fliprot <- rotateFixed(D2Mdx_mask_flip, 270) #Then rotate the mask 270 degrees
+    
+    for (i in 1:dim(tissuepositions)[1]){
+        tissuepositions$mask[i] <-  D2Mdx_mask_fliprot[tissuepositions$V6[i], tissuepositions$V5[i]]
+    } # For loop aligning the tissue positions to the matrix of mask
+    
+    tissuepositions <- tissuepositions[rownames(visiumD2Mdx@meta.data),] # align barcodes between csv file and image annotation
+    visiumD2Mdx@meta.data <- cbind(visiumD2Mdx@meta.data, tissuepositions$mask) # add mask info to metadata 
+    colnames(visiumD2Mdx@meta.data)[dim(visiumD2Mdx@meta.data)[2]] <- sub("/exports/humgen/lheezen/visium/mouse/Annotations/D2-Mdx//FULL-1_", "", idx) #rename the colname to specific mask-image
+}
+
+head(visiumD2Mdx@meta.data)
+
+#Make new column 'allmask' where the labels of different muscles and histological appearance are given when ==1 
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2mdx_VM_resize.png == 1] <- "VM"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_VL_resize.png == 1] <- "VL"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_RF_resize.png == 1] <- "RF"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_VI_resize.png == 1] <- "VI"
+
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam1_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam2_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam3_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam4_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam5_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam6_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam7_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam8_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam9_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam10_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam11_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam12_resize.png == 1] <- "Inflammation"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Inflam13_resize.png == 1] <- "Inflammation"
+
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Hyptertroph1_resize.png == 1] <- "Hypertrophy"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Hyptertroph2_resize.png == 1] <- "Hypertrophy"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Hypertroph3_resize.png  == 1] <- "Hypertrophy"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Hypertroph4_resize.png  == 1] <- "Hypertrophy"
+
+#visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_FatInfil1_resize.png == 1] <- "Fat infiltration" #Silenced the ones that have NA only zeros in it
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_FatInfil2_resize.png == 1] <- "Fat infiltration"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_FatInfil3_resize.png == 1] <- "Fat infiltration"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_FatInfil4_resize.png == 1] <- "Fat infiltration"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_FatInfil5_resize.png == 1] <- "Fat infiltration"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_FatInfil6_resize.png == 1] <- "Fat infiltration"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_FatInfil7_resize.png == 1] <- "Fat infiltration"
+
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification1_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification2_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification3_resize.png == 1] <- "Calcification"
+#visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification4_resize.png == 1] <- "Calcification"
+#visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification5_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification6_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification7_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification8_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification9_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification10_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification11_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification12_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification13_resize.png == 1] <- "Calcification"
+#visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification14_resize.png == 1] <- "Calcification"
+#visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification15_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification16_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification17_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification18_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification19_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification20_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification21_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification22_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification23_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification24_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification25_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification26_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification27_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification28_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification29_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification30_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification31_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification32_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification33_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification34_resize.png == 1] <- "Calcification"
+#visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification35_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification36_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification37_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification38_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification39_resize.png == 1] <- "Calcification"
+visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification40_resize.png == 1] <- "Calcification"
+#visiumD2Mdx@meta.data$allmask[visiumD2Mdx@meta.data$D2Mdx_Calcification41_resize.png == 1] <- "Calcification"
+
+#Save object
+saveRDS(visiumD2Mdx, file = "/exports/humgen/lheezen/visium/mouse/Analysis/210428/D2Mdx_filtnormalizedclustmasks.rds")
+
+```
+
+#Fiber type composition
+```{r}
+Fibertypes <- c("Myh7", "Myh2", "Myh4", "Myh1")
+```
+##C57BL10
+```{r}
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_C57_myh1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumC57BL10, features = 'Myh1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#00441b','#006d2c', '#238b45')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_C57_myh7.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumC57BL10, features = 'Myh7', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#00441b','#006d2c', '#238b45')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_C57_myh4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumC57BL10, features = 'Myh4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#00441b','#006d2c', '#238b45')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_C57_myh2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumC57BL10, features = 'Myh2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#00441b','#006d2c', '#238b45')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+```
+##DBA2J
+```{r}
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_DBA_myh2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumDBA2J, features = 'Myh2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#00441b','#006d2c', '#238b45')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_DBA_myh4_2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumDBA2J, features = 'Myh4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#00441b','#006d2c', '#238b45')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.5), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_DBA_myh7.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumDBA2J, features = 'Myh7', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#00441b','#006d2c', '#238b45')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_DBA_myh1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumDBA2J, features = 'Myh1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#00441b','#006d2c', '#238b45')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+```
+##mdx
+```{r}
+##mdx
+#Plot the masks on top of sample image
+png(filename = "/home/lgmheezen/Spat_mdx_fibertypes.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+c <- SpatialPlot(visiumMdx, group.by = 'maskname_mdx', cols = c('#f7f7f7', '#e66101', '#b2abd2', '#f1a340'))
+c
+dev.off()
+
+png(filename = "/home/lgmheezen/Violin_mdx_fibertypes.png",
+    width = 8, height = 12, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumMdx, features = Fibertypes, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'maskname_D2Mdx', cols = c('#e66101', '#5e3c99', '#b2abd2', '#f1a340', '#f7f7f7'), same.y.lims = TRUE) +
+  theme(legend.position = "none") + ggtitle("Fibertype markers mdx")
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_mdx_myh2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumMdx, features = 'Myh2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#3f007d','#54278f', '#6a51a3')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_mdx_myh7.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumMdx, features = 'Myh7', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#3f007d','#54278f', '#6a51a3')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_mdx_myh4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumMdx, features = 'Myh4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#3f007d','#54278f', '#6a51a3')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_mdx_myh1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumMdx, features = 'Myh1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#3f007d','#54278f', '#6a51a3')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+```
+##D2-mdx
+```{r}
+#Plot the masks on top of sample image
+png(filename = "/home/lgmheezen/Spat_D2mdx_fibertypes.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+c <- SpatialPlot(visiumD2Mdx, group.by = 'maskname_D2Mdx', cols = c('#e66101', '#5e3c99', '#b2abd2', '#f1a340', '#f7f7f7'))
+c
+dev.off()
+
+png(filename = "/home/lgmheezen/Violin_D2mdx_fibertypes.png",
+    width = 8, height = 12, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumD2Mdx, features = Fibertypes, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'maskname_D2Mdx', cols = c('#e66101', '#5e3c99', '#b2abd2', '#f1a340', '#f7f7f7'), same.y.lims = TRUE) +
+  theme(legend.position = "none") + ggtitle("Fibertype markers D2mdx")
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_D2mdx_myh1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumD2Mdx, features = 'Myh1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#3f007d','#54278f', '#6a51a3')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_D2mdx_myh2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumD2Mdx, features = 'Myh2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#3f007d','#54278f', '#6a51a3')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_D2mdx_myh4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumD2Mdx, features = 'Myh4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#3f007d','#54278f', '#6a51a3')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Myh_D2mdx_myh7.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+b <- SpatialFeaturePlot(visiumD2Mdx, features = 'Myh7', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#3f007d','#54278f', '#6a51a3')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+b
+dev.off()
+```
+##Myh assay pos cells
+```{r}
+##C57BL10
+Myh1_expression_C57 <- GetAssayData(object = visiumC57BL10, assay = "Spatial", slot = "data")["Myh1",]
+Myh2_expression_C57 <- GetAssayData(object = visiumC57BL10, assay = "Spatial", slot = "data")["Myh2",]
+Myh4_expression_C57 <- GetAssayData(object = visiumC57BL10, assay = "Spatial", slot = "data")["Myh4",]
+Myh7_expression_C57 <- GetAssayData(object = visiumC57BL10, assay = "Spatial", slot = "data")["Myh7",]
+
+#Get IDs 
+pos_ids_Myh1_C57 = names(which(Myh1_expression_C57>0))
+neg_ids_Myh1_C57 = names(which(Myh1_expression_C57==0))
+pos_ids_Myh2_C57 = names(which(Myh2_expression_C57>0))
+neg_ids_Myh2_C57 = names(which(Myh2_expression_C57==0))
+pos_ids_Myh4_C57 = names(which(Myh4_expression_C57>0))
+neg_ids_Myh4_C57 = names(which(Myh4_expression_C57==0))
+pos_ids_Myh7_C57 = names(which(Myh7_expression_C57>0))
+neg_ids_Myh7_C57 = names(which(Myh7_expression_C57==0))
+
+#Numbers
+noMyh1C57pos <- length(which(Myh1_expression_C57>0)) #1810
+noMyh1C57neg <- length(which(Myh1_expression_C57==0)) #531
+noMyh2C57pos <- length(which(Myh2_expression_C57>0)) #656
+noMyh2C57neg <- length(which(Myh2_expression_C57==0)) #1685
+noMyh4C57pos <- length(which(Myh4_expression_C57>0)) #2341
+noMyh4C57neg <- length(which(Myh4_expression_C57==0)) #0
+noMyh7C57pos <- length(which(Myh7_expression_C57>0)) #72
+noMyh7C57neg <- length(which(Myh7_expression_C57==0)) #2269
+
+#Percentage
+percMyh1C57 <- (noMyh1C57pos/(noMyh1C57pos+noMyh1C57neg)*100) #77.32
+percMyh2C57 <- (noMyh2C57pos/(noMyh2C57pos+noMyh2C57neg)*100) #28.02
+percMyh4C57 <- (noMyh4C57pos/(noMyh4C57pos+noMyh4C57neg)*100) #100
+percMyh7C57 <- (noMyh7C57pos/(noMyh7C57pos+noMyh7C57neg)*100) #3.08
+
+#If wanted: subset
+pos_cells = subset(pbmc_small,cells=pos_ids)
+neg_cells = subset(pbmc_small,cells=neg_ids)
+
+##DBA2J
+#Myh assay pos cells
+Myh1_expression_DBA <- GetAssayData(object = visiumDBA2J, assay = "Spatial", slot = "data")["Myh1",]
+Myh2_expression_DBA <- GetAssayData(object = visiumDBA2J, assay = "Spatial", slot = "data")["Myh2",]
+Myh4_expression_DBA <- GetAssayData(object = visiumDBA2J, assay = "Spatial", slot = "data")["Myh4",]
+Myh7_expression_DBA <- GetAssayData(object = visiumDBA2J, assay = "Spatial", slot = "data")["Myh7",]
+
+#Get IDs 
+pos_ids_Myh1_DBA = names(which(Myh1_expression_DBA>0))
+neg_ids_Myh1_DBA = names(which(Myh1_expression_DBA==0))
+pos_ids_Myh2_DBA = names(which(Myh2_expression_DBA>0))
+neg_ids_Myh2_DBA = names(which(Myh2_expression_DBA==0))
+pos_ids_Myh4_DBA = names(which(Myh4_expression_DBA>0))
+neg_ids_Myh4_DBA = names(which(Myh4_expression_DBA==0))
+pos_ids_Myh7_DBA = names(which(Myh7_expression_DBA>0))
+neg_ids_Myh7_DBA = names(which(Myh7_expression_DBA==0))
+
+#Numbers
+noMyh1DBApos <- length(which(Myh1_expression_DBA>0)) #1152
+noMyh1DBAneg <- length(which(Myh1_expression_DBA==0)) #273
+noMyh2DBApos <- length(which(Myh2_expression_DBA>0)) #370
+noMyh2DBAneg <- length(which(Myh2_expression_DBA==0)) #1055
+noMyh4DBApos <- length(which(Myh4_expression_DBA>0)) #1425
+noMyh4DBAneg <- length(which(Myh4_expression_DBA==0)) #0
+noMyh7DBApos <- length(which(Myh7_expression_DBA>0)) #27
+noMyh7DBAneg <- length(which(Myh7_expression_DBA==0)) #1398
+
+#Percentage
+percMyh1DBA <- (noMyh1DBApos/(noMyh1DBApos+noMyh1DBAneg)*100) #80.84
+percMyh2DBA <- (noMyh2DBApos/(noMyh2DBApos+noMyh2DBAneg)*100) #25.96
+percMyh4DBA <- (noMyh4DBApos/(noMyh4DBApos+noMyh4DBAneg)*100) #100
+percMyh7DBA <- (noMyh7DBApos/(noMyh7DBApos+noMyh7DBAneg)*100) #1.89
+
+##mdx
+#Myh assay pos cells
+Myh1_expression_mdx <- GetAssayData(object = visiumMdx, assay = "Spatial", slot = "data")["Myh1",]
+Myh2_expression_mdx <- GetAssayData(object = visiumMdx, assay = "Spatial", slot = "data")["Myh2",]
+Myh4_expression_mdx <- GetAssayData(object = visiumMdx, assay = "Spatial", slot = "data")["Myh4",]
+Myh7_expression_mdx <- GetAssayData(object = visiumMdx, assay = "Spatial", slot = "data")["Myh7",]
+
+#Get IDs 
+pos_ids_Myh1_mdx = names(which(Myh1_expression_mdx>0))
+neg_ids_Myh1_mdx = names(which(Myh1_expression_mdx==0))
+pos_ids_Myh2_mdx = names(which(Myh2_expression_mdx>0))
+neg_ids_Myh2_mdx = names(which(Myh2_expression_mdx==0))
+pos_ids_Myh4_mdx = names(which(Myh4_expression_mdx>0))
+neg_ids_Myh4_mdx = names(which(Myh4_expression_mdx==0))
+pos_ids_Myh7_mdx = names(which(Myh7_expression_mdx>0))
+neg_ids_Myh7_mdx = names(which(Myh7_expression_mdx==0))
+
+#Numbers
+noMyh1mdxpos <- length(which(Myh1_expression_mdx>0)) #1594
+noMyh1mdxneg <- length(which(Myh1_expression_mdx==0)) #286
+noMyh2mdxpos <- length(which(Myh2_expression_mdx>0)) #190
+noMyh2mdxneg <- length(which(Myh2_expression_mdx==0)) #1690
+noMyh4mdxpos <- length(which(Myh4_expression_mdx>0)) #1880
+noMyh4mdxneg <- length(which(Myh4_expression_mdx==0)) #0
+noMyh7mdxpos <- length(which(Myh7_expression_mdx>0)) #9
+noMyh7mdxneg <- length(which(Myh7_expression_mdx==0)) #1871
+
+#Percentage
+percMyh1mdx <- (noMyh1mdxpos/(noMyh1mdxpos+noMyh1mdxneg)*100) #84.7
+percMyh2mdx <- (noMyh2mdxpos/(noMyh2mdxpos+noMyh2mdxneg)*100) #10.11
+percMyh4mdx <- (noMyh4mdxpos/(noMyh4mdxpos+noMyh4mdxneg)*100) #100
+percMyh7mdx <- (noMyh7mdxpos/(noMyh7mdxpos+noMyh7mdxneg)*100) #0.48
+
+##D2mdx
+#Myh assay pos cells
+Myh1_expression_D2mdx <- GetAssayData(object = visiumD2Mdx, assay = "Spatial", slot = "data")["Myh1",]
+Myh2_expression_D2mdx <- GetAssayData(object = visiumD2Mdx, assay = "Spatial", slot = "data")["Myh2",]
+Myh4_expression_D2mdx <- GetAssayData(object = visiumD2Mdx, assay = "Spatial", slot = "data")["Myh4",]
+Myh7_expression_D2mdx <- GetAssayData(object = visiumD2Mdx, assay = "Spatial", slot = "data")["Myh7",]
+
+#Get IDs 
+pos_ids_Myh1_D2mdx = names(which(Myh1_expression_D2mdx>0))
+neg_ids_Myh1_D2mdx = names(which(Myh1_expression_D2mdx==0))
+pos_ids_Myh2_D2mdx = names(which(Myh2_expression_D2mdx>0))
+neg_ids_Myh2_D2mdx = names(which(Myh2_expression_D2mdx==0))
+pos_ids_Myh4_D2mdx = names(which(Myh4_expression_D2mdx>0))
+neg_ids_Myh4_D2mdx = names(which(Myh4_expression_D2mdx==0))
+pos_ids_Myh7_D2mdx = names(which(Myh7_expression_D2mdx>0))
+neg_ids_Myh7_D2mdx = names(which(Myh7_expression_D2mdx==0))
+
+#Numbers
+noMyh1D2mdxpos <- length(which(Myh1_expression_D2mdx>0)) #1216
+noMyh1D2mdxneg <- length(which(Myh1_expression_D2mdx==0)) #151
+noMyh2D2mdxpos <- length(which(Myh2_expression_D2mdx>0)) #567
+noMyh2D2mdxneg <- length(which(Myh2_expression_D2mdx==0)) #800
+noMyh4D2mdxpos <- length(which(Myh4_expression_D2mdx>0)) #1367
+noMyh4D2mdxneg <- length(which(Myh4_expression_D2mdx==0)) #0
+noMyh7D2mdxpos <- length(which(Myh7_expression_D2mdx>0)) #85
+noMyh7D2mdxneg <- length(which(Myh7_expression_D2mdx==0)) #1282
+
+#Percentage
+percMyh1D2mdx <- (noMyh1D2mdxpos/(noMyh1D2mdxpos+noMyh1D2mdxneg)*100) #88.95
+percMyh2D2mdx <- (noMyh2D2mdxpos/(noMyh2D2mdxpos+noMyh2D2mdxneg)*100) #41.78
+percMyh4D2mdx <- (noMyh4D2mdxpos/(noMyh4D2mdxpos+noMyh4D2mdxneg)*100) #100
+percMyh7D2mdx <- (noMyh7D2mdxpos/(noMyh7D2mdxpos+noMyh7D2mdxneg)*100) #6.22
+
+##Compare fiber types for VM only for all mouse models
+Idents(object = visiumMdx) <- "maskname_mdx"
+Idents(object = visiumDBA2J) <- "musclemask_DBA2J"
+Idents(object = visiumC57BL10) <- "maskname_C57BL10"
+Idents(object = visiumD2Mdx) <- "maskname_D2Mdx"
+
+#C57
+a <- VlnPlot(object = visiumC57BL10, features = "Myh7")
+b <- VlnPlot(object = visiumC57BL10, features ="Myh1")
+c <- VlnPlot(object = visiumC57BL10, features = "Myh4")
+d <- VlnPlot(object = visiumC57BL10, features = "Myh2")
+
+a$data %>% group_by(ident) %>% summarize(counts = sum(Myh7, na.rm = TRUE))
+b$data %>% group_by(ident) %>% summarize(counts = sum(Myh1, na.rm = TRUE))
+c$data %>% group_by(ident) %>% summarize(counts = sum(Myh4, na.rm = TRUE))
+d$data %>% group_by(ident) %>% summarize(counts = sum(Myh2, na.rm = TRUE))
+
+a$data %>% group_by(ident) %>% summarize(counts = mean(Myh7, na.rm = TRUE))
+b$data %>% group_by(ident) %>% summarize(counts = mean(Myh1, na.rm = TRUE))
+c$data %>% group_by(ident) %>% summarize(counts = mean(Myh4, na.rm = TRUE))
+d$data %>% group_by(ident) %>% summarize(counts = mean(Myh2, na.rm = TRUE))
+
+#DBA2J
+e <- VlnPlot(object = visiumDBA2J, features = "Myh7")
+f <- VlnPlot(object = visiumDBA2J, features ="Myh1")
+g <- VlnPlot(object = visiumDBA2J, features = "Myh4")
+h <- VlnPlot(object = visiumDBA2J, features = "Myh2")
+
+e$data %>% group_by(ident) %>% summarize(counts = sum(Myh7, na.rm = TRUE))
+f$data %>% group_by(ident) %>% summarize(counts = sum(Myh1, na.rm = TRUE))
+g$data %>% group_by(ident) %>% summarize(counts = sum(Myh4, na.rm = TRUE))
+h$data %>% group_by(ident) %>% summarize(counts = sum(Myh2, na.rm = TRUE))
+
+e$data %>% group_by(ident) %>% summarize(counts = mean(Myh7, na.rm = TRUE))
+f$data %>% group_by(ident) %>% summarize(counts = mean(Myh1, na.rm = TRUE))
+g$data %>% group_by(ident) %>% summarize(counts = mean(Myh4, na.rm = TRUE))
+h$data %>% group_by(ident) %>% summarize(counts = mean(Myh2, na.rm = TRUE))
+
+#mdx
+i <- VlnPlot(object = visiumMdx, features = "Myh7")
+j <- VlnPlot(object = visiumMdx, features ="Myh1")
+k <- VlnPlot(object = visiumMdx, features = "Myh4")
+l <- VlnPlot(object = visiumMdx, features = "Myh2")
+
+i$data %>% group_by(ident) %>% summarize(counts = sum(Myh7, na.rm = TRUE))
+j$data %>% group_by(ident) %>% summarize(counts = sum(Myh1, na.rm = TRUE))
+k$data %>% group_by(ident) %>% summarize(counts = sum(Myh4, na.rm = TRUE))
+l$data %>% group_by(ident) %>% summarize(counts = sum(Myh2, na.rm = TRUE))
+
+i$data %>% group_by(ident) %>% summarize(counts = mean(Myh7, na.rm = TRUE))
+j$data %>% group_by(ident) %>% summarize(counts = mean(Myh1, na.rm = TRUE))
+k$data %>% group_by(ident) %>% summarize(counts = mean(Myh4, na.rm = TRUE))
+l$data %>% group_by(ident) %>% summarize(counts = mean(Myh2, na.rm = TRUE))
+
+#D2mdx
+p <- VlnPlot(object = visiumD2Mdx, features ="Myh7")
+q <- VlnPlot(object = visiumD2Mdx, features ="Myh1")
+r <- VlnPlot(object = visiumD2Mdx, features = "Myh4")
+s <- VlnPlot(object = visiumD2Mdx, features = "Myh2")
+
+p$data %>% group_by(ident) %>% summarize(counts = sum(Myh7, na.rm = TRUE))
+q$data %>% group_by(ident) %>% summarize(counts = sum(Myh1, na.rm = TRUE))
+r$data %>% group_by(ident) %>% summarize(counts = sum(Myh4, na.rm = TRUE))
+s$data %>% group_by(ident) %>% summarize(counts = sum(Myh2, na.rm = TRUE))
+
+p$data %>% group_by(ident) %>% summarize(counts = mean(Myh7, na.rm = TRUE))
+q$data %>% group_by(ident) %>% summarize(counts = mean(Myh1, na.rm = TRUE))
+r$data %>% group_by(ident) %>% summarize(counts = mean(Myh4, na.rm = TRUE))
+s$data %>% group_by(ident) %>% summarize(counts = mean(Myh2, na.rm = TRUE))
+```
+##Plot musclemasks on top of spatial plot
+```{r}
+##Plot the masks on top of sample image
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Mask_D2Mdx_NL.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+c <- SpatialPlot(visiumD2Mdx, group.by = 'maskname_D2Mdx', cols = c('#e66101', '#5e3c99', '#b2abd2', '#f1a340', '#f7f7f7'), image.alpha = 0.2) &NoLegend() &NoAxes()
+c
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Mask_Mdx_NL.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+c <- SpatialPlot(visiumMdx, group.by = 'maskname_mdx', cols = c('#f7f7f7', '#e66101', '#b2abd2', '#f1a340'), image.alpha = 0.2) &NoLegend() &NoAxes()
+c
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Mask_C57_NL.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+c <- SpatialPlot(visiumC57BL10, group.by = 'maskname_C57BL10', cols = c('#e66101', '#f7f7f7','#5e3c99', '#b2abd2', '#f1a340', '#f7f7f7'), image.alpha = 0.2) &NoLegend() &NoAxes()
+c
+dev.off()
+
+#('#e66101', '#f7f7f7','#5e3c99', '#b2abd2', '#f1a340', '#f7f7f7')
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Mask_DBA2J_NL.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+c <- SpatialPlot(visiumDBA2J, group.by = 'musclemask_DBA2J', cols = c('#e66101', '#b2abd2', '#f1a340'), image.alpha = 0.2) &NoLegend() &NoAxes()
+c
+dev.off()
+```
+
+
+#Rename clusters
+```{r}
+#Load objects
+visiumC57BL10 <- readRDS(file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/C57BL10_filtnormalized.rds", refhook = NULL)
+visiumDBA2J <- readRDS(file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/DBA2J_filtnormalized.rds", refhook = NULL)
+visiumMdx <- readRDS(file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/Mdx_filtnormalized.rds", refhook = NULL)
+visiumD2Mdx <- readRDS(file = "/exports/humgen/lheezen/visium/mouse/Analysis/210411/D2-Mdx_filtnormalized.rds", refhook = NULL)
+
+#Set Idents to correct SCT resolution
+Idents(object = visiumC57BL10) <- "SCT_snn_res.0.4"
+Idents(object = visiumDBA2J) <- "SCT_snn_res.0.8"
+Idents(object = visiumMdx) <- "SCT_snn_res.0.8"
+Idents(object = visiumD2Mdx) <- "SCT_snn_res.0.4"
+```
+##C57BL10
+```{r}
+#Rename/label the clusters and plot with nice colors
+visiumC57BL10_labelled <- RenameIdents(object = visiumC57BL10, 
+                                       "0" = "Muscle fibers",
+                                       "1" = "Muscle fibers",
+                                       "2" = "Muscle fibers",
+                                       "3" = "Muscle fibers",
+                                       "4" = "Erythrocytes",
+                                       "5" = "Muscle fibers",
+                                       "6" = "Connective tissue",
+                                       "7" = "Immune response",
+                                       "8" = "VI muscle fibers")
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_tSNE_C57BL10_Clusters_relabelled_legend.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- DimPlot(visiumC57BL10_labelled, reduction = "tsne", cols = clustcolnew[c(2,10,5,6,11)], label = FALSE, pt.size = 2, label.size = 8)  + ggtitle("tSNE C57BL10") & NoLegend() & NoAxes()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_Spatialplot_C57BL10_Clusters_relabelled.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p2 <- SpatialDimPlot(visiumC57BL10_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0) + scale_fill_manual(values = clustcolnew[c(2,10,5,6,11)]) + ggtitle("Clusters C57BL10") & NoLegend()
+p2
+dev.off()
+
+#Add as vector to the object
+visiumC57BL10@meta.data$relabelled[visiumC57BL10@meta.data$SCT_snn_res.0.4 == 0] <- "Muscle fibers"
+visiumC57BL10@meta.data$relabelled[visiumC57BL10@meta.data$SCT_snn_res.0.4 == 1] <- "Muscle fibers"
+visiumC57BL10@meta.data$relabelled[visiumC57BL10@meta.data$SCT_snn_res.0.4 == 2] <- "Muscle fibers"
+visiumC57BL10@meta.data$relabelled[visiumC57BL10@meta.data$SCT_snn_res.0.4 == 3] <- "Muscle fibers"
+visiumC57BL10@meta.data$relabelled[visiumC57BL10@meta.data$SCT_snn_res.0.4 == 4] <- "Erythrocytes"
+visiumC57BL10@meta.data$relabelled[visiumC57BL10@meta.data$SCT_snn_res.0.4 == 5] <- "Muscle fibers"
+visiumC57BL10@meta.data$relabelled[visiumC57BL10@meta.data$SCT_snn_res.0.4 == 6] <- "Connective tissue"
+visiumC57BL10@meta.data$relabelled[visiumC57BL10@meta.data$SCT_snn_res.0.4 == 7] <- "Immune response"
+visiumC57BL10@meta.data$relabelled[visiumC57BL10@meta.data$SCT_snn_res.0.4 == 8] <- "VI muscle fibers"
+
+#Save object
+saveRDS(visiumC57BL10, file = "/exports/humgen/lheezen/visium/mouse/Analysis/211105/211108_C57BL10_relabellednew.rds", refhook = NULL)
+```
+##DBA2J
+```{r}
+#Rename/label the clusters and plot with nice colors
+visiumDBA2J_labelled <- RenameIdents(object = visiumDBA2J, 
+                                     "0" = "Muscle fibers",
+                                     "1" = "Muscle fibers",
+                                     "2" = "Muscle fibers",
+                                     "3" = "Muscle fibers",
+                                     "4" = "Muscle fibers",
+                                     "5" = "Connective tissue",
+                                     "6" = "Erythrocytes",
+                                     "7" = "Neuromuscular junction")
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_tSNE_DBA2J2_Clusters_relabelled_legend.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- DimPlot(visiumDBA2J_labelled, reduction = "tsne", cols = clustcolnew[c(2,5,10,8)], label = FALSE, pt.size = 2, label.size = 8) + ggtitle("tSNE DBA2J") & NoLegend() & NoAxes()
+p1 
+dev.off()
+
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_Spatialplot_DBA2J_Clusters_relabelled.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p2 <- SpatialDimPlot(visiumDBA2J_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0 ) + scale_fill_manual(values = clustcolnew[c(2,5,10,8)]) + ggtitle("Clusters DBA/2J") & NoLegend()
+p2
+dev.off()
+
+#Add as vector to the object
+visiumDBA2J@meta.data$relabelled[visiumDBA2J@meta.data$SCT_snn_res.0.8 == 0] <- "Muscle fibers"
+visiumDBA2J@meta.data$relabelled[visiumDBA2J@meta.data$SCT_snn_res.0.8 == 1] <- "Muscle fibers"
+visiumDBA2J@meta.data$relabelled[visiumDBA2J@meta.data$SCT_snn_res.0.8 == 2] <- "Muscle fibers"
+visiumDBA2J@meta.data$relabelled[visiumDBA2J@meta.data$SCT_snn_res.0.8 == 3] <- "Muscle fibers"
+visiumDBA2J@meta.data$relabelled[visiumDBA2J@meta.data$SCT_snn_res.0.8 == 4] <- "Muscle fibers"
+visiumDBA2J@meta.data$relabelled[visiumDBA2J@meta.data$SCT_snn_res.0.8 == 5] <- "Connective tissue"
+visiumDBA2J@meta.data$relabelled[visiumDBA2J@meta.data$SCT_snn_res.0.8 == 6] <- "Erythrocytes"
+visiumDBA2J@meta.data$relabelled[visiumDBA2J@meta.data$SCT_snn_res.0.8 == 7] <- "Neuromuscular junction"
+
+#Save object
+saveRDS(visiumDBA2J, file = "/exports/humgen/lheezen/visium/mouse/Analysis/211105/211108_DBA2J_relabellednew.rds", refhook = NULL)
+```
+##mdx
+```{r}
+#Rename/label the clusters and plot with nice colors
+visiumMdx_labelled <- RenameIdents(object = visiumMdx, 
+                                   "0" = "Regenerating fibers and inflamed patches",
+                                   "1" = "Regenerated fibers",
+                                   "2" = "Muscle fibers without CN",
+                                   "3" = "Regenerating fibers and inflamed patches",
+                                   "4" = "Muscle fibers",
+                                   "5" = "Erythrocytes",
+                                   "6" = "Necrotic fibers and macrophages",
+                                   "7" = "Adipocytes")
+
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_tSNE_mdx2_Clusters_relabelled_legend.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- DimPlot(visiumMdx_labelled, reduction = "tsne", cols = clustcolnew[c(6,9,7,2,10,3,4)], label = FALSE, pt.size = 2, label.size = 8) + ggtitle("tSNE mdx") & NoLegend() & NoAxes()
+p1 
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_Spatialplot_mdx_Clusters_relabelled.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p3 <- SpatialDimPlot(visiumMdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0) + scale_fill_manual(values = clustcolnew[c(6,9,7,2,10,3,4)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Clusters mdx")  & NoLegend()
+p3
+dev.off()
+
+#Add as vector to the object
+visiumMdx@meta.data$relabelled[visiumMdx@meta.data$SCT_snn_res.0.8 == 0] <- "Regenerating fibers and inflamed patches"
+visiumMdx@meta.data$relabelled[visiumMdx@meta.data$SCT_snn_res.0.8 == 1] <- "Regenerated fibers"
+visiumMdx@meta.data$relabelled[visiumMdx@meta.data$SCT_snn_res.0.8 == 2] <- "Muscle fibers without CN"
+visiumMdx@meta.data$relabelled[visiumMdx@meta.data$SCT_snn_res.0.8 == 3] <- "Regenerating fibers and inflamed patches"
+visiumMdx@meta.data$relabelled[visiumMdx@meta.data$SCT_snn_res.0.8 == 4] <- "Muscle fibers"
+visiumMdx@meta.data$relabelled[visiumMdx@meta.data$SCT_snn_res.0.8 == 5] <- "Erythrocytes"
+visiumMdx@meta.data$relabelled[visiumMdx@meta.data$SCT_snn_res.0.8 == 6] <- "Necrotic fibers and macrophages"
+visiumMdx@meta.data$relabelled[visiumMdx@meta.data$SCT_snn_res.0.8 == 7] <- "Adipocytes"
+
+#Save object
+saveRDS(visiumMdx, file = "/exports/humgen/lheezen/visium/mouse/Analysis/211105/211108_mdx_relabellednew.rds", refhook = NULL)
+```
+##D2-mdx
+```{r}
+#Rename/label the clusters and plot with nice colors
+visiumD2Mdx_labelled <- RenameIdents(object = visiumD2Mdx, 
+                                       "0" = "Muscle fibers",
+                                       "1" = "Inflamed and/or calcified fibers",
+                                       "2" = "Necrosis",
+                                       "3" = "Erythrocytes",
+                                       "4" = "Muscle fibers",
+                                       "5" = "Connective tissue")
+
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_tSNE_D2Mdx_Clusters_relabellednew_legend.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- DimPlot(visiumD2Mdx_labelled, reduction = "tsne", cols = clustcolnew[c(2,6,3,10,5)], label = FALSE, pt.size = 2, label.size = 8) + ggtitle("tSNE D2-mdx") # & NoLegend() & NoAxes()
+p1 
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_Spatialplot_D2Mdx_Clusters_relabellednew.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p2 <- SpatialDimPlot(visiumD2Mdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0 ) + scale_fill_manual(values = clustcolnew[c(2,6,3,10,5)],  guide = guide_legend(override.aes = list(size=3))) + ggtitle("Clusters D2-mdx") & NoLegend()
+p2
+dev.off()
+
+#Add as vector to the object
+visiumD2Mdx@meta.data$relabelled[visiumD2Mdx@meta.data$SCT_snn_res.0.4 == 0] <- "Muscle fibers"
+visiumD2Mdx@meta.data$relabelled[visiumD2Mdx@meta.data$SCT_snn_res.0.4 == 1] <- "Inflamed and/or calcified fibers"
+visiumD2Mdx@meta.data$relabelled[visiumD2Mdx@meta.data$SCT_snn_res.0.4 == 2] <- "Necrosis"
+visiumD2Mdx@meta.data$relabelled[visiumD2Mdx@meta.data$SCT_snn_res.0.4 == 3] <- "Erythrocytes"
+visiumD2Mdx@meta.data$relabelled[visiumD2Mdx@meta.data$SCT_snn_res.0.4 == 4] <- "Muscle fibers"
+visiumD2Mdx@meta.data$relabelled[visiumD2Mdx@meta.data$SCT_snn_res.0.4 == 5] <- "Connective tissue"
+
+#Save object
+saveRDS(visiumD2Mdx, file = "/exports/humgen/lheezen/visium/mouse/Analysis/211105/211108_D2mdx_relabellednew.rds", refhook = NULL)
+```
+
+#Plot cluster marker genes and spots
+##C57BL10
+```{r}
+#Plot cluster spots spatially
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-mus.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumC57BL10_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumC57BL10_labelled, idents = "Muscle fibers")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Muscle fibers C57")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-VImus.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumC57BL10_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumC57BL10_labelled, idents = "VI muscle fibers")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("VI muscle fibers C57")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-Imm.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumC57BL10_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumC57BL10_labelled, idents = "Immune response")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Immune response C57")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-Ery.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumC57BL10_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumC57BL10_labelled, idents = "Erythrocytes")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Erythrocytes C57")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-Con.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumC57BL10_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumC57BL10_labelled, idents = "Connective tissue")) + scale_fill_manual(values = healthycols[c(1,9)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Connective tissue C57")  & NoLegend()
+p1
+dev.off()
+
+#Connective tissue
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-con-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57con2 <- SpatialFeaturePlot(visiumC57BL10, features = 'Col1a1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57con2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-con-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57con3 <- SpatialFeaturePlot(visiumC57BL10, features = 'Fmod', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57con3
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-con-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57con1 <- SpatialFeaturePlot(visiumC57BL10, features = 'Col1a2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57con1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-mus-4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57mus4 <- SpatialFeaturePlot(visiumC57BL10, features = 'Tpm2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57mus4
+dev.off()
+
+#VI muscle fibers
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-VI-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57VI1 <- SpatialFeaturePlot(visiumC57BL10, features = 'Myl3', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57VI1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-VI-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57VI2 <- SpatialFeaturePlot(visiumC57BL10, features = 'Myl2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57VI2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-VI-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57VI3 <- SpatialFeaturePlot(visiumC57BL10, features = 'Myh7', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57VI3
+dev.off()
+
+#Immune response
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-Im-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57Im1 <- SpatialFeaturePlot(visiumC57BL10, features = 'Spp1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57Im1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-Im-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57Im2 <- SpatialFeaturePlot(visiumC57BL10, features = 'Lyz2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57Im2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-Im-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57Im3 <- SpatialFeaturePlot(visiumC57BL10, features = 'Ctsb', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57Im3
+dev.off()
+
+#Erythrocytes
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-ery-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57ery1 <- SpatialFeaturePlot(visiumC57BL10, features = 'Hba-a1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57ery1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-ery-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57ery2 <- SpatialFeaturePlot(visiumC57BL10, features = 'Hba-a2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57ery2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57-ery-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57ery3 <- SpatialFeaturePlot(visiumC57BL10, features = 'Hbb-bt', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57ery3
+dev.off()
+```
+##DBA2J
+```{r}
+#Plot cluster spots spatially
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-mus.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumDBA2J_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumDBA2J_labelled, idents = "Muscle fibers")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Muscle fibers DBA")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-NMJ.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumDBA2J_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumDBA2J_labelled, idents = "Neuromuscular junction")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("NMJ DBA")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-Ery.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumDBA2J_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumDBA2J_labelled, idents = "Erythrocytes")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Erythrocytes DBA")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-Con.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumDBA2J_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumDBA2J_labelled, idents = "Connective tissue")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Connective tissue DBA")  & NoLegend()
+p1
+dev.off()
+
+#NMJ
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-NMJ-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBA2Jnmj1 <- SpatialFeaturePlot(visiumDBA2J, features = 'Mbp', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBA2Jnmj1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-NMJ-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBA2Jnmj2 <- SpatialFeaturePlot(visiumDBA2J, features = 'Mpz', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBA2Jnmj2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-NMJ-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBA2Jnmj3 <- SpatialFeaturePlot(visiumDBA2J, features = 'Chrne', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBA2Jnmj3
+dev.off()
+
+#Erythrocytes
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-ery-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBA2Jery1 <- SpatialFeaturePlot(visiumDBA2J, features = 'Hbb-bt', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBA2Jery1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-ery-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBA2Jery2 <- SpatialFeaturePlot(visiumDBA2J, features = 'Hba-a1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBA2Jery2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-ery-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBA2Jery3 <- SpatialFeaturePlot(visiumDBA2J, features = 'Hba-a2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBA2Jery3
+dev.off()
+
+#Connective tissue
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-con-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBA2Jcon1 <- SpatialFeaturePlot(visiumDBA2J, features = 'Fmod', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBA2Jcon1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-con-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBA2Jcon2 <- SpatialFeaturePlot(visiumDBA2J, features = 'Col1a1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBA2Jcon2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA-con-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBA2Jcon3 <- SpatialFeaturePlot(visiumDBA2J, features = 'Col1a2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBA2Jcon3
+dev.off()
+```
+##mdx
+```{r}
+#Plot cluster spots spatially
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-mus.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumMdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumMdx_labelled, idents = "Muscle fibers")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Muscle fibers mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-reginmus.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumMdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumMdx_labelled, idents = "Regenerating fibers and inflamed patches")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Regenerating fibers and inflamed patches mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-CNmus.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumMdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumMdx_labelled, idents = "Muscle fibers without CN")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Wo CN mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-regmus.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumMdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumMdx_labelled, idents = "Regenerated fibers")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Regenerated fibers mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Ery.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumMdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumMdx_labelled, idents = "Erythrocytes")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Erythrocytes mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Adi.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumMdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumMdx_labelled, idents = "Adipocytes")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Adipocytes mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Nec.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumMdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumMdx_labelled, idents = "Necrotic fibers and macrophages")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Necrotic Macro mdx")  & NoLegend()
+p1
+dev.off()
+
+#Erythrocytes
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-ery-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxery1 <- SpatialFeaturePlot(visiumMdx, features = 'Hba-a1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxery1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-ery-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxery2 <- SpatialFeaturePlot(visiumMdx, features = 'Hba-a2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxery2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-ery-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxery3 <- SpatialFeaturePlot(visiumMdx, features = 'Hbb-bt', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxery3
+dev.off()
+
+#Macroph + necrosis
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-nec-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxnec1 <- SpatialFeaturePlot(visiumMdx, features = 'Cd68', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxnec1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-nec-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxnec2 <- SpatialFeaturePlot(visiumMdx, features = 'Tyrobp', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxnec2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-nec-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxnec3 <- SpatialFeaturePlot(visiumMdx, features = 'Vim', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxnec3
+dev.off()
+
+#Adipocytes
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-adi-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxadi1 <- SpatialFeaturePlot(visiumMdx, features = 'Apoc1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxadi1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-adi-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxadi2 <- SpatialFeaturePlot(visiumMdx, features = 'Adipoq', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxadi2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-adi-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxadi3 <- SpatialFeaturePlot(visiumMdx, features = 'Scd1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxadi3
+dev.off()
+
+#Muscle fibers without CN
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-CN-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxcn1 <- SpatialFeaturePlot(visiumMdx, features = 'Amd1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxcn1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-CN-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxcn2 <- SpatialFeaturePlot(visiumMdx, features = 'Amd2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxcn2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-CN-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxcn3 <- SpatialFeaturePlot(visiumMdx, features = 'Smox', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxcn3
+dev.off()
+
+#Recently regenerated fibers
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-rec-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxrec2 <- SpatialFeaturePlot(visiumMdx, features = 'Gsn', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxrec2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-rec-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxrec3 <- SpatialFeaturePlot(visiumMdx, features = 'Igfbp7', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxrec3
+dev.off()
+
+#Trdn downregulated!
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-rec-4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxrec4 <- SpatialFeaturePlot(visiumMdx, features = 'Trdn', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxrec4
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-rec-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxrec3 <- SpatialFeaturePlot(visiumMdx, features = 'Fhl1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxrec3
+dev.off()
+
+#Regenerating fib inflamed patch
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-reg-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxreg1 <- SpatialFeaturePlot(visiumMdx, features = 'Xirp2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxreg1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-reg-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxreg2 <- SpatialFeaturePlot(visiumMdx, features = 'Myh1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxreg2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-reg-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxreg3 <- SpatialFeaturePlot(visiumMdx, features = 'Lars2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxreg3
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-reg-4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+mdxreg4 <- SpatialFeaturePlot(visiumMdx, features = 'Mybpc1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+mdxreg4
+dev.off()
+
+```
+##D2-mdx
+```{r}
+#Plot cluster spots spatially
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Ery.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumD2Mdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumD2Mdx_labelled, idents = "Erythrocytes")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Erythrocytes D2mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Nec.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumD2Mdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumD2Mdx_labelled, idents = "Necrosis")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Necrosis D2mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Con.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumD2Mdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumD2Mdx_labelled, idents = "Connective tissue")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Connective tissue D2mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Cal.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumD2Mdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumD2Mdx_labelled, idents = "Inflamed and/or calcified fibers")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Infl cal D2mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Mus.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumD2Mdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumD2Mdx_labelled, idents = "Muscle fibers")) + scale_fill_manual(values = colorsmask[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Muscle fibers D2mdx")  & NoLegend()
+p1
+dev.off()
+
+#Connective tissue
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-con-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mcon1 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Col1a2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mcon1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-con-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mcon2 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Col1a1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mcon2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-con-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mcon3 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Fmod', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mcon3
+dev.off()
+
+#Erythrocytes
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-ery-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mery1 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Hba-a1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mery1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-ery-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mery2 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Hba-a2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mery2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-ery-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mery3 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Hbb-bt', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mery3
+dev.off()
+
+#Inflamed and/or calcified fibers
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-cal-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mcal1 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Mgp', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mcal1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-cal-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mcal2 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Mpeg1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mcal2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-cal-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mcal3 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Spp1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mcal3
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-cal-4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mcal4 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Lyz2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mcal4
+dev.off()
+
+#Necrosis
+#Uba52: decreased > deubiquitinase > muscle atrophy
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-nec-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mnec1 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Uba52', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mnec1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-nec-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mnec2 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Eef1d', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mnec2
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2m-nec-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2mnec3 <- SpatialFeaturePlot(visiumD2Mdx, features = 'Cox6a2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2mnec3
+dev.off()
+
+```
+
+#**SPOTlight deconvolution in other scripts provided on GitHub**
+
+#Cell type deconvolution marker genes
+##C57BL10: TC
+```{r}
+#Highlight cluster 
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/contis-c57.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p2 <- SpatialDimPlot(visiumC57BL10_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumC57BL10_labelled, idents = "Connective tissue")) + scale_fill_manual(values = extracols[c(10,7,8,9,5,1,3)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Connective tissue C57BL10")  & NoLegend()
+p2
+dev.off()
+
+#Map markers
+tenocytemark <- c('Col1a1', 'Tnc', 'Scx', 'Col1a2', 'Col3a1')
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/tcmark1-c57.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumC57BL10, features = 'Col1a1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/tcmark2-c57.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumC57BL10, features = 'Col1a2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/tcmark3-c57.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumC57BL10, features = 'Fmod', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+```
+##DBA2J: NMJ
+```{r}
+#Highlight cluster
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/nmj-dba.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p2 <- SpatialDimPlot(visiumDBA2J_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumDBA2J_labelled, idents = "Neuromuscular junction")) + scale_fill_manual(values = extracols[c(10,7,8,9,5,1,3)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("NMJ DBA2J")  & NoLegend()
+p2
+dev.off()
+
+#Map markers
+NMJmark <- c('Pmp22', 'Mpz', 'Chrne', 'Nes')
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/nmjmark1-dba.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumDBA2J, features = 'Pmp22', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/nmjmark2-dba.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumDBA2J, features = 'Mpz', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/nmjmark3-dba.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumDBA2J, features = 'Chrne', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+```
+##mdx: FAP/MPH
+```{r}
+#Highlight cluster
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/nec-mdx.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p2 <- SpatialDimPlot(visiumMdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumMdx_labelled, idents = "Necrotic fibers and macrophages")) + scale_fill_manual(values = extracols[c(10,7,8,9,5,1,3)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Necrotis and macrophages mdx")  & NoLegend()
+p2
+dev.off()
+
+#Map markers
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/necmark1-mdx.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumMdx, features = 'Cd68', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/necmark2-mdx.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumMdx, features = 'Tnfrsf1a', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/necmark3-mdx.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumMdx, features = 'Tnfrsf1b', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+```
+##D2-mdx: MPH
+```{r}
+#Highlight cluster
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/macroph-D2mdx.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p2 <- SpatialDimPlot(visiumD2Mdx_labelled,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0, cells.highlight = WhichCells(visiumD2Mdx_labelled, idents = "Inflamed and/or calcified fibers")) + scale_fill_manual(values = extracols[c(10,7,8,9,5,1,3)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Inflamed and-or calcified fibers D2-mdx")  & NoLegend()
+p2
+dev.off()
+
+#Map markers
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mphmark1-d2mdx.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumD2Mdx, features = 'Cd68', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mphmark2-d2mdx.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumD2Mdx, features = 'Cd14', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mphmark3-d2mdx.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+test <- SpatialFeaturePlot(visiumD2Mdx, features = 'Tgfbi', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+test
+dev.off()
+
+```
+
+#DE gene analysis
+##Regeneration
+```{r}
+#Mybpc1 and Igfbp7 are marker genes for regeneration
+#Set idents to relabelled column
+Idents(object = visiumMdx) <- "relabelled"
+
+#Make vector specifically for spots that express markergenes and fall in cluster Reg/RecReg to compare to 'real' healthy fibers
+visiumMdx@meta.data$regfib[visiumMdx@meta.data$relabelled == "Regenerated fibers" & visiumMdx@assays$Spatial@counts["Myog",]> 0 & visiumMdx@assays$Spatial@counts["Igfbp7",]> 0] <- "Regeneration"
+visiumMdx@meta.data$regfib[visiumMdx@meta.data$relabelled == "Regenerated fibers" & visiumMdx@assays$Spatial@counts["Myh3",]> 0 & visiumMdx@assays$Spatial@counts["Igfbp7",]> 0] <- "Regeneration"
+visiumMdx@meta.data$regfib[visiumMdx@meta.data$relabelled == "Regenerating fibers and inflamed patches" & visiumMdx@assays$Spatial@counts["Myog",]> 0 & visiumMdx@assays$Spatial@counts["Igfbp7",]> 0] <- "Regeneration"
+visiumMdx@meta.data$regfib[visiumMdx@meta.data$relabelled == "Regenerating fibers and inflamed patches" & visiumMdx@assays$Spatial@counts["Myh3",]> 0 & visiumMdx@assays$Spatial@counts["Igfbp7",]> 0] <- "Regeneration"
+
+visiumMdx@meta.data$regfib[visiumMdx@meta.data$relabelled == "Regenerated fibers" & visiumMdx@assays$Spatial@counts["Igfbp7",] == 0 & visiumMdx@assays$Spatial@counts["Myog",]== 0 & visiumMdx@assays$Spatial@counts["Myh3",]== 0] <- "NonRegeneration"
+visiumMdx@meta.data$regfib[visiumMdx@meta.data$relabelled == "Regenerating fibers and inflamed patches" & visiumMdx@assays$Spatial@counts["Igfbp7",] == 0 & visiumMdx@assays$Spatial@counts["Myog",]== 0 & visiumMdx@assays$Spatial@counts["Myh3",]== 0] <- "NonRegeneration"
+
+visiumMdx@meta.data$regfib[visiumMdx@meta.data$relabelled == "Muscle fibers without CN" & visiumMdx@assays$Spatial@counts["Igfbp7",]>0 & visiumMdx@assays$Spatial@counts["Mybpc1",]> 0] <- "Noncomp Healthy"
+
+#Healthy
+visiumMdx@meta.data$regfib[visiumMdx@meta.data$relabelled == "Muscle fibers without CN" & visiumMdx@assays$Spatial@counts["Igfbp7",] == 0 & visiumMdx@assays$Spatial@counts["Myog",]== 0 & visiumMdx@assays$Spatial@counts["Myh3",]== 0] <- "Healthy"
+
+#Plot the spots included now in analysis on H&E
+Idents(object = visiumMdx) <- "regfib" #set idents to new column of included spots
+colorsmask2 <- c('#297a8e', '#f5f5f5') #healthy
+colorsmask3 <- c('#67000d','#f5f5f5') #diseased
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-RegenerationSpots.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumMdx,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0.0, cells.highlight = WhichCells(visiumMdx, idents = "Regeneration")) + scale_fill_manual(values = colorsmask3[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Regeneration fibers mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-HealthySpots.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumMdx,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0.0, cells.highlight = WhichCells(visiumMdx, idents = "Healthy")) + scale_fill_manual(values = colorsmask2[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Non reg fibers mdx")  & NoLegend()
+p1
+dev.off()
+
+#Marker genes Igfbp7, Myog, Myh3
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Igfbp7.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2reg <- SpatialFeaturePlot(visiumD2Mdx, features = 'Hspg2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2reg
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Myog.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2reg <- SpatialFeaturePlot(visiumMdx, features = 'Myog', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2reg
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Myh3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2reg <- SpatialFeaturePlot(visiumMdx, features = 'Myh3', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2reg
+dev.off()
+
+#Find DE genes for regeneration
+Idents(object = visiumMdx) <- "regfib"
+
+regenerationDEgenes <- FindMarkers(visiumMdx, ident.1 = "Regeneration", ident.2 = "Healthy", thresh.use = 0.25, test.use = "wilcox", min.pct = 0.1, only.pos = TRUE)
+
+write.csv(regenerationDEgenes,"C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/RegenerationDEgenes.csv", row.names = TRUE)
+
+#Top20 genes based on avg_log2FC
+top20reg <- c("Myh1",	"Myl4",	"Igfbp7", "Col3a1",	"Gsn",	"Fabp4", "Tmsb10", "Apoe", 	
+  "Casq1", "Actc1", "Mgp", "Mybpc1", "S100a6", 	"Sparc", 	"Actn2", "Lyz2", "Cd74", "Hspg2", "Mb", "Col4a1")
+
+D2reg <- SpatialFeaturePlot(visiumMdx, features = top20reg, pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2reg
+
+png(filename = "/home/lgmheezen/Violin_mdx_regeneration.png",
+    width = 8, height = 12, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumMdx, features = top20reg, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'regfib', same.y.lims = TRUE) +
+  theme(legend.position = "none") + ggtitle("Regeneration markers mdx")
+a
+dev.off()
+
+##Plot top markers Cd74, Myl4, Hspg2
+topmarkreg <- c('Myl4','Sparc','Hspg2')
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Violin_mdx_regenerationtopmark-final.png",
+    width = 8, height = 12, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumMdx, features = topmarkreg, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'regfib', same.y.lims = TRUE, cols = c('#297a8e', '#297a8e', 'white', '#67000d')) +
+  theme(legend.position = "none") + ggtitle("Regeneration markers mdx")
+a
+dev.off()
+
+#Spatial top markers
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Myl4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2reg <- SpatialFeaturePlot(visiumMdx, features = 'Myl4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#67000d','#a50f15', '#cb181d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2reg
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Cd74.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2reg <- SpatialFeaturePlot(visiumMdx, features = 'Cd74', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#67000d','#a50f15', '#cb181d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2reg
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Hspg2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2reg <- SpatialFeaturePlot(visiumMdx, features = 'Hspg2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#67000d','#a50f15', '#cb181d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2reg
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx-Sparc.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2reg <- SpatialFeaturePlot(visiumMdx, features = 'Sparc', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#67000d','#a50f15', '#cb181d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2reg
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57BL10-Sparc.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2reg <- SpatialFeaturePlot(visiumC57BL10, features = 'Apoe', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#67000d','#a50f15', '#cb181d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2reg
+dev.off()
+
+#Regeneration markers on background
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57BL10-Hspg2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57reg <- SpatialFeaturePlot(visiumC57BL10, features = 'Hspg2', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#67000d','#a50f15', '#cb181d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57reg
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57BL10-Myl4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57reg <- SpatialFeaturePlot(visiumC57BL10, features = 'Myl4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#67000d','#a50f15', '#cb181d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57reg
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57BL10-Cd74.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+C57reg <- SpatialFeaturePlot(visiumC57BL10, features = 'Cd74', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#67000d','#a50f15', '#cb181d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+C57reg
+dev.off()
+```
+##Fibrosis
+```{r}
+#Fibrosis marker genes: Cd34+ Cd90+ Lox > Cd90 not expressed in this experiment
+#Set idents to relabelled column
+Idents(object = visiumD2Mdx) <- "relabelled"
+
+#Make vector specifically for spots that express Lox/Cd34 and fall in clusters to compare to 'real' healthy fibers:
+##Fibrotic
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Inflamed and/or calcified fibers" & visiumD2Mdx@assays$Spatial@counts["Cd34",]> 0] <- "Fibrotic"
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Inflamed and/or calcified fibers" & visiumD2Mdx@assays$Spatial@counts["Cd34",]> 0 & visiumD2Mdx@assays$Spatial@counts["Lox",]> 0] <- "Fibrotic"
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Muscle fibers" & visiumD2Mdx@assays$Spatial@counts["Cd34",]> 0] <- "Fibrotic"
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Muscle fibers" & visiumD2Mdx@assays$Spatial@counts["Cd34",]> 0 & visiumD2Mdx@assays$Spatial@counts["Lox",]> 0] <- "Fibrotic"
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Connective tissue" & visiumD2Mdx@assays$Spatial@counts["Cd34",]> 0] <- "Fibrotic"
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Connective tissue" & visiumD2Mdx@assays$Spatial@counts["Cd34",]> 0 & visiumD2Mdx@assays$Spatial@counts["Lox",]> 0] <- "Fibrotic"
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Connective tissue" & visiumD2Mdx@assays$Spatial@counts["Lox",]> 0 & visiumD2Mdx@assays$Spatial@counts["Col1a1",] > 3] <- "Fibrotic"
+
+##Not completely healthy
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Inflamed and/or calcified fibers" & visiumD2Mdx@assays$Spatial@counts["Cd34",] == 0] <- "NonFibrotic"
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Muscle fibers" & visiumD2Mdx@assays$Spatial@counts["Cd34",] > 0] <- "NoncomplHealthy"
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Muscle fibers" & visiumD2Mdx@assays$Spatial@counts["Cd34",] > 0 & visiumD2Mdx@assays$Spatial@counts["Lox",] > 0] <- "NoncomplHealthy"
+
+#Healthy
+visiumD2Mdx@meta.data$fibrfib[visiumD2Mdx@meta.data$relabelled == "Muscle fibers" & visiumD2Mdx@assays$Spatial@counts["Cd34",] == 0 & visiumD2Mdx@assays$Spatial@counts["Lox",] == 0  & visiumD2Mdx@assays$Spatial@counts["Col1a1",] < 2] <- "Healthy"
+
+#Plot the spots included now in analysis on H&E
+Idents(object = visiumD2Mdx) <- "fibrfib" #set idents to new column of included spots
+colorsmask2 <- c('#297a8e', '#f5f5f5') #healthy
+colorsmask4 <- c('#7f2704','#f5f5f5') #diseased
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Fibrotic_fibrosis.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumD2Mdx,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0.0, cells.highlight = WhichCells(visiumD2Mdx, idents = "Fibrotic")) + scale_fill_manual(values = colorsmask4[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Fibrotic D2mdx")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Healthy_fibrosis.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumD2Mdx,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0.0, cells.highlight = WhichCells(visiumD2Mdx, idents = "Healthy")) + scale_fill_manual(values = colorsmask2[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Healthy D2mdx")  & NoLegend()
+p1
+dev.off()
+
+#Find DE genes for fibrosis
+Idents(object = visiumD2Mdx) <- "fibrfib"
+fibrosisDEgenes <- FindMarkers(visiumD2Mdx, ident.1 = "Fibrotic", ident.2 = "Healthy", thresh.use = 0.25, test.use = "wilcox", min.pct = 0.1, only.pos = TRUE)
+
+write.csv(fibrosisDEgenes,"C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/FibrosisDEgenes.csv", row.names = TRUE)
+
+##Marker genes Lox, Cd34, Col1a1
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Lox.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Lox', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#662506','#993404', '#cc4c02')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Cd34.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Cd34', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#662506','#993404', '#cc4c02')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Col1a1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Col1a1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#662506','#993404', '#cc4c02')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+#Top20 genes based on avg_log2FC
+top20fib <- c("Col1a1",	"Col1a2",	"Spp1", "Col3a1",	"Lyz2",	"Sparc", "Actb", "Apoe", 	
+  "Bgn", "Ctsb", "Ftl1", "Fmod", "Fn1", 	"Mgp", 	"Thbs4", "Ctsk", "Ctsl", "Psap", "Vim", "Tmsb10")
+
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = top20fib, pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+
+png(filename = "/home/lgmheezen/Violin_D2mdx_fibertypes.png",
+    width = 8, height = 12, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumD2Mdx, features = top20fib, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'fibrfib', same.y.lims = TRUE) +
+  theme(legend.position = "none") + ggtitle("Fibrosis markers D2mdx")
+a
+dev.off()
+
+##Top marker genes Fmod, Fn1, Thbs4
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Vim.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Vim', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#662506','#993404', '#cc4c02')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Fn1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Fn1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#662506','#993404', '#cc4c02')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Thbs4.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Thbs4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#662506','#993404', '#cc4c02')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+D2fibmark <- c('Vim','Fn1','Thbs4')
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Violin_D2mdx_fibrosistopmark-final.png",
+    width = 8, height = 12, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumD2Mdx, features = D2fibmark, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'fibrfib', same.y.lims = TRUE, cols = c('#662506', '#297a8e', 'white', '#67000d')) +
+  theme(legend.position = "none") + ggtitle("Fibrosis markers D2-mdx")
+a
+dev.off()
+
+#Fibrosis markers on background topcalmark ('Vim','Fn1','Thbs4')
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA2J-Vim-fib.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBAfib <- SpatialFeaturePlot(visiumDBA2J, features = 'Vim', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#662506','#993404', '#cc4c02')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBAfib
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA2J-Thbs4-fib.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBAfib <- SpatialFeaturePlot(visiumDBA2J, features = 'Thbs4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#662506','#993404', '#cc4c02')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBAfib
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA2J-Fn1-fib.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBAfib <- SpatialFeaturePlot(visiumDBA2J, features = 'Fn1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c('#662506','#993404', '#cc4c02')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBAfib
+dev.off()
+
+
+```
+##Calcification
+```{r}
+#Set idents to relabelled column
+Idents(object = visiumD2Mdx) <- "relabelled"
+
+#Make vector specifically for spots that express Mgp (calcification marker) and fall in cluster calcification/inflam to compare to 'real' healthy fibers
+visiumD2Mdx@meta.data$calfib[visiumD2Mdx@meta.data$relabelled == "Inflamed and/or calcified fibers" & visiumD2Mdx@assays$Spatial@counts["Mgp",]> 0] <- "Calcified"
+visiumD2Mdx@meta.data$calfib[visiumD2Mdx@meta.data$relabelled == "Inflamed and/or calcified fibers" & visiumD2Mdx@assays$Spatial@counts["Mgp",] == 0] <- "NonCalcified"
+visiumD2Mdx@meta.data$calfib[visiumD2Mdx@meta.data$relabelled == "Muscle fibers" & visiumD2Mdx@assays$Spatial@counts["Mgp",] > 0] <- "NoncomplHealthy"
+visiumD2Mdx@meta.data$calfib[visiumD2Mdx@meta.data$relabelled == "Muscle fibers" & visiumD2Mdx@assays$Spatial@counts["Mgp",] == 0] <- "Healthy"
+
+#Plot the spots included now in analysis on H&E
+Idents(object = visiumD2Mdx) <- "calfib" #set idents to new column of included spots
+colorsmask2 <- c('#297a8e', '#f5f5f5') #healthy
+colorsmask5 <- c('#6e016b','#f5f5f5') #diseased
+
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Calcified_calcification.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumD2Mdx,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0.0, cells.highlight = WhichCells(visiumD2Mdx, idents = "Calcified")) + scale_fill_manual(values = colorsmask5[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Muscle fibers C57")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Healthy_calcification.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumD2Mdx,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0.0, cells.highlight = WhichCells(visiumD2Mdx, idents = "Healthy")) + scale_fill_manual(values = colorsmask2[c(1,2)], guide = guide_legend(override.aes = list(size=3))) + ggtitle("Muscle fibers C57")  & NoLegend()
+p1
+dev.off()
+
+
+#Find DE genes for calcification
+Idents(object = visiumD2Mdx) <- "calfib"
+
+calcificationDEgenes <- FindMarkers(visiumD2Mdx, ident.1 = "Calcified", ident.2 = "Healthy", thresh.use = 0.25, test.use = "wilcox", min.pct = 0.1, only.pos = TRUE)
+
+write.csv(calcificationDEgenes,"C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/CalcificationDEgenes.csv", row.names = TRUE)
+
+#Top20 genes based on avg_log2FC
+top20cal <- c("Spp1",	"Lyz2",	"Actb", "Ctsb",	"Ftl1",	"Col3a1", "Apoe", "Psap", 	
+  "Col1a1", "Tmsb10", "Mgp", "Lgals3", "Col1a2", 	"Fn1", 	"Ckb", "Bgn", "Ctsl", "Mmp12", "Ctsz", "Ctsk")
+
+D2cal <- SpatialFeaturePlot(visiumD2Mdx, features = top20cal, pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#8c6bb1','#88419d', '#6e016b')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2cal
+
+##
+#8c6bb1
+#88419d
+#6e016b
+
+##Marker genes Lox, Cd34, Col1a1
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Mgp.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Mgp', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#6e016b','#88419d', '#8c6bb1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+png(filename = "/home/lgmheezen/Violin_D2mdx_fibertypes.png",
+    width = 8, height = 12, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumD2Mdx, features = top20cal, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'calfib', same.y.lims = TRUE) +
+  theme(legend.position = "none") + ggtitle("Calcification markers D2mdx")
+a
+dev.off()
+
+
+##Top 
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Bgn.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Bgn', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#6e016b','#88419d', '#8c6bb1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Ctsk.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Ctsk', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#6e016b','#88419d', '#8c6bb1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx-Spp1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+D2fib <- SpatialFeaturePlot(visiumD2Mdx, features = 'Spp1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#6e016b','#88419d', '#8c6bb1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+D2fib
+dev.off()
+
+topcalmark <- c('Bgn','Ctsk','Spp1')
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Violin_D2mdx_calcifictopmark-final.png",
+    width = 8, height = 20, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumD2Mdx, features = topcalmark, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'calfib', same.y.lims = TRUE, cols = c('#6e016b', '#297a8e', 'white', '#67000d')) +
+  theme(legend.position = "none") + ggtitle("Calcification markers D2-mdx")
+a
+dev.off()
+
+#Calcification markers on background topcalmark ('Bgn','Ctsk','Spp1')
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA2J-Bgn.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBAcal <- SpatialFeaturePlot(visiumDBA2J, features = 'Bgn', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#6e016b','#88419d', '#8c6bb1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBAcal
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA2J-Spp1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBAcal <- SpatialFeaturePlot(visiumDBA2J, features = 'Spp1', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#6e016b','#88419d', '#8c6bb1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBAcal
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA2J-Ctsk.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+DBAcal <- SpatialFeaturePlot(visiumDBA2J, features = 'Ctsk', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#6e016b','#88419d', '#8c6bb1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+DBAcal
+dev.off()
+
+```
+
+#**Spatial velocity analysis in other script**
+
+#Extra NMJ plots
+##C57BL10
+```{r}
+#Plot marker genes
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_C57BL10_spatial_Mpz.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumC57BL10, features = "Mpz", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_C57BL10_spatial_Chrne.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumC57BL10, features = "Chrne", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_C57BL10_spatial_Mbp.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumC57BL10, features = "Mbp", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+#Plot marker genes aggregrate
+NMJmarkerlist <- list(c("Mpz", "Chrne", "Mbp"))
+visiumC57BL10 <- AddModuleScore(object = visiumC57BL10, features = NMJmarkerlist, name = "NMJmarkers")
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_C57BL10_tSNE_aggr.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p9 <- FeaturePlot(object = visiumC57BL10, features = "NMJmarkers1", order=T, pt.size = 2)
+p9
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_C57BL10_spatial_aggr.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p8 <- SpatialFeaturePlot(visiumC57BL10, features = "NMJmarkers1", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p8
+dev.off()
+
+#Get aggregate expression of genes of interest
+p6 <- AggregateExpression(visiumC57BL10, features = c("Mpz", "Chrne", "Mbp"), slot = 'data')
+p6
+
+#Plot marker genes on tSNE
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_C57BL10_tSNE.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p5 <- FeaturePlot(visiumC57BL10, features = c("Mpz", "Chrne", "Mbp"), keep.scale = "all")
+p5
+dev.off()
+```
+##DBA2J
+```{r}
+#Plot marker genes
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_DBA2J_spatial_Mpz.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumDBA2J, features = "Nes", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_DBA2J_spatial_Chrne.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumDBA2J, features = "Chrne", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_DBA2J_spatial_Mbp.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumDBA2J, features = "Mbp", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+#Plot marker genes aggregrate
+NMJmarkerlist <- list(c("Mpz", "Chrne", "Mbp"))
+object <- AddModuleScore(object = visiumDBA2J, features = NMJmarkerlist, name = "NMJmarkers")
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_DBA2J_tSNE_aggr.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p9 <- FeaturePlot(object = visiumDBA2J, features = "NMJmarkers1", order=T, pt.size = 2)
+p9
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_DBA2J_spatial_aggr.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p8 <- SpatialFeaturePlot(visiumDBA2J, features = "NMJmarkers1", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p8
+dev.off()
+
+#Get aggregate expression of genes of interest
+p6 <- AggregateExpression(visiumDBA2J, features = c("Mpz", "Chrne", "Mbp"), slot = 'data')
+p6
+
+#Plot marker genes on tSNE
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_DBA2J_tSNE.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p5 <- FeaturePlot(visiumDBA2J, features = c("Mpz", "Chrne", "Mbp"), keep.scale = "all")
+p5
+dev.off()
+
+#Highlight NMJ cluster on tSNE
+Idents(object = visiumDBA2J) <- "relabelled"
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_DBA2J_NMJclust.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- SpatialDimPlot(visiumDBA2J,  label = FALSE, label.size = 3,label.color = "white", label.box = TRUE, repel = TRUE, image.alpha = 0.0, cells.highlight = WhichCells(visiumDBA2J, idents = "Neuromuscular junction")) + scale_fill_manual(values = c('#fdb056', '#f5f5f5'), guide = guide_legend(override.aes = list(size=3))) + ggtitle("Muscle fibers C57")  & NoLegend()
+p1
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_DBA2J_NMJclust_tSNE_legend.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p1 <- DimPlot(visiumDBA2J,  reduction = "tsne", pt.size = 2, cells.highlight = WhichCells(visiumDBA2J, idents = "Neuromuscular junction"), sizes.highlight = 2, cols.highlight = c('#fdb056', '#f5f5f5')) #& NoLegend() & NoAxes()
+p1
+dev.off()
+```
+##mdx
+```{r}
+#Plot marker genes
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_mdx_spatial_Mpz.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumMdx, features = "Mpz", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_mdx_spatial_Chrne.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumMdx, features = "Chrne", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_mdx_spatial_Mbp.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumMdx, features = "Mbp", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+#Plot marker genes aggregrate
+NMJmarkerlist <- list(c("Mpz", "Chrne", "Mbp"))
+visiumMdx <- AddModuleScore(object = visiumMdx, features = NMJmarkerlist, name = "NMJmarkers")
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_mdx_tSNE_aggr.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p9 <- FeaturePlot(object = visiumMdx, features = "NMJmarkers1", order=T, pt.size = 2, keep.scale = 'all')
+p9
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_mdx_spatial_aggr.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p8 <- SpatialFeaturePlot(visiumMdx, features = "NMJmarkers1", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p8
+dev.off()
+
+#Get aggregate expression of genes of interest
+p6 <- AggregateExpression(visiumMdx, features = c("Mpz", "Chrne", "Mbp"), slot = 'data')
+p6
+
+#Plot marker genes on tSNE
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_mdx_tSNE.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p5 <- FeaturePlot(visiumMdx, features = c("Mpz", "Chrne", "Mbp"), keep.scale = "all")
+p5
+dev.off()
+```
+##D2-mdx
+```{r}
+#Plot marker genes
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_D2mdx_spatial_Mpz.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumD2Mdx, features = "Mpz", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_D2mdx_spatial_Chrne.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumD2Mdx, features = "Chrne", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_D2mdx_spatial_Mbp.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p4 <- SpatialFeaturePlot(visiumD2Mdx, features = "Mbp", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p4
+dev.off()
+
+#Plot marker genes aggregrate
+NMJmarkerlist <- list(c("Mpz", "Chrne", "Mbp"))
+visiumD2Mdx <- AddModuleScore(object = visiumD2Mdx, features = NMJmarkerlist, name = "NMJmarkers")
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_D2mdx_tSNE_aggr.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p9 <- FeaturePlot(object = visiumD2Mdx, features = "NMJmarkers1", order=T, pt.size = 2, keep.scale = 'all') 
+p9
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_D2mdx_spatial_aggr.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p8 <- SpatialFeaturePlot(visiumD2Mdx, features = "NMJmarkers1", alpha = c(0.1, 1), pt.size.factor = 1.5, image.alpha = 0.5) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#003c30','#35978f', '#80cdc1')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,3.0), breaks = c(0.0, 1.0, 2.0, 3.0))
+p8
+dev.off()
+
+#Get aggregate expression of genes of interest
+Idents(object = visiumD2Mdx) <- "relabelled"
+p6 <- AggregateExpression(visiumD2Mdx, features = c("Mpz", "Chrne", "Mbp"), slot = 'data')
+p6
+
+#Plot marker genes on tSNE
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220621_NMJmarkers_D2mdx_tSNE.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p5 <- FeaturePlot(visiumD2Mdx, features = c("Mpz", "Chrne", "Mbp"), keep.scale = "all")
+p5
+dev.off()
+```
+##merged
+```{r}
+#Plot marker genes on tSNE
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220624_NMJmarkers_Merged_tSNE.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+p5 <- FeaturePlot(visium.merge, features = c("Mpz", "Chrne", "Mbp"), keep.scale = "all")
+p5
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Figures/220624_origident_Merged_tSNE.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+px <- DimPlot(visium.merge, reduction = "umap", group.by = "orig.ident", label = TRUE, cols = samplecols[c(1,4,2,3)]) + ggtitle("UMAP samples")
+px
+dev.off()
+```
+
+
+#**SuperExactTests were performed in shiny application: https://network.shinyapps.io/superexacttest/**
+
+#Muscle fiber markers
+```{r}
+Idents(object = visiumC57BL10) <- "relabelled"
+Idents(object = visiumDBA2J) <- "relabelled"
+Idents(object = visiumMdx) <- "relabelled"
+Idents(object = visiumD2Mdx) <- "relabelled"
+
+#Violin C57
+MarkallC57 <- c("Ckm", "Myh4", "Mylpf", "Hba-a1", "Hbb-bt", "Hba-a2","Col1a2", "Col1a1", "Fmod","Myl2", "Myl3", "Myh7", "Spp1", "Lyz2", "Ctsb")
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Violin_C57_markall.png",
+    width = 5, height = 20, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumC57BL10, features = MarkallC57, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'relabelled', cols = healthycols[c(1,5,3,7,6)], same.y.lims = TRUE) +
+  theme(legend.position = "none") + ggtitle("Top markers per cluster C57BL10")
+a
+dev.off()
+
+#Violin DBA
+MarkallDBA <- c("Col1a2", "Col1a1", "Fmod", "Hba-a1", "Hbb-bt", "Hba-a2", "Ckm", "Myh4", "Mylpf","Chrne", "Mpz","Mbp")
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Violin_DBA_markall.png",
+    width = 5, height = 20, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumDBA2J, features = MarkallDBA, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'relabelled', cols = healthycols[c(1,5,7,3)], same.y.lims = TRUE) +
+  theme(legend.position = "none") + ggtitle("Top markers per cluster DBA2J")
+a
+dev.off()
+
+#Violin mdx
+Markallmdx <- c("Ckm", "Myh4", "Mylpf", "Amd1", "Amd2", "Smox",  "Gsn", "Igfbp7", "Fhl1", "Hba-a1", "Hbb-bt", "Hba-a2", "Xirp2", "Lars2", "Mybpc1", "Vim", "Cd68", "Tyrobp", "Scd1", "Adipoq", "Apoc1")
+
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Violin_mdx_markall.png",
+    width = 5, height = 20, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumMdx, features = Markallmdx, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'relabelled', cols = extracols[c(3,5,9,8,1,7,10)] , same.y.lims = TRUE) +
+  theme(legend.position = "none") + ggtitle("Top markers per cluster mdx")
+a
+dev.off()
+
+#Violin D2mdx
+MarkallD2mdx <- c("Spp1", "Mgp", "Mpeg1", "Ckm", "Myh4", "Mylpf", "Uba52", "Eef1d", "Cox6a2", "Hba-a1", "Hbb-bt", "Hba-a2","Col1a2", "Col1a1", "Fmod")
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/Violin_D2mdx_markall.png",
+    width = 5, height = 20, units = "in", res = 300,
+    bg = "transparent")
+a <- VlnPlot(visiumD2Mdx, features = MarkallD2mdx, stack = TRUE, sort = FALSE, flip = TRUE, split.by = 'relabelled', cols = extracols[c(3,5,10,9,1)], same.y.lims = TRUE) +
+  theme(legend.position = "none") + ggtitle("Top markers per cluster D2mdx")
+a
+dev.off()
+
+#MusFib C57, DBA, mdx, D2mdx
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57_musfib-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumC57BL10, features = 'Ckm', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57_musfib-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumC57BL10, features = 'Mylpf', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/C57_musfib-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumC57BL10, features = 'Myh4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA_musfib-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumDBA2J, features = 'Ckm', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,6.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA_musfib-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumDBA2J, features = 'Mylpf', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,6.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/DBA_musfib-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumDBA2J, features = 'Myh4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,6.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx_musfib-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumMdx, features = 'Ckm', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx_musfib-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumMdx, features = 'Mylpf', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/mdx_musfib-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumMdx, features = 'Myh4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx_musfib-1.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumD2Mdx, features = 'Ckm', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx_musfib-2.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumD2Mdx, features = 'Mylpf', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+png(filename = "C:/Users/lgmheezen/OneDrive - LUMC/Ahmed_Laura_Pietro/Deconvolution/Spotlight/Laura/D2mdx_musfib-3.png",
+    width = 8, height = 6, units = "in", res = 300,
+    bg = "transparent")
+a <- SpatialFeaturePlot(visiumD2Mdx, features = 'Myh4', pt.size.factor = 1.5, image.alpha = 0) +scale_fill_gradient2(low = rev(c('#f6e8c3', '#dfc27d', '#f5f5f5')), mid = "transparent", high = rev(c( '#440154','#453581', '#34618d')), midpoint = 0, guide = "colourbar", aesthetics = "fill", limits = c(0.0,5.0), breaks = c(0.0, 1.0, 2.0, 3.0, 4.0, 5.0)) #& NoLegend()
+a
+dev.off()
+
+
+```
+
